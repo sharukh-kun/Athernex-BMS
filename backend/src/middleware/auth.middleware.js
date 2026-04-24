@@ -1,15 +1,31 @@
 import jwt from "jsonwebtoken";
 import User from "../models/user.model.js";
 
+const getJwtSecret = () => process.env.JWT_SECRET?.trim();
+
+const clearJwtCookie = (res) => {
+  res.cookie("jwt", "", {
+    maxAge: 0,
+    httpOnly: true,
+    sameSite: "strict",
+    secure: process.env.NODE_ENV === "production",
+  });
+};
+
 export const protectRoute = async (req, res, next) => {
   try {
     const token = req.cookies.jwt;
+    const jwtSecret = getJwtSecret();
+
+    if (!jwtSecret) {
+      return res.status(500).json({ message: "JWT_SECRET is not configured" });
+    }
 
     if (!token) {
       return res.status(401).json({ message: "Unauthorized - No Token Provided" });
     }
 
-    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    const decoded = jwt.verify(token, jwtSecret);
 
     if (!decoded) {
       return res.status(401).json({ message: "Unauthorized - Invalid Token" });
@@ -27,6 +43,7 @@ export const protectRoute = async (req, res, next) => {
   } catch (error) {
     if (error?.name === "JsonWebTokenError" || error?.name === "TokenExpiredError") {
       console.debug("[auth] token validation failed:", error.message);
+      clearJwtCookie(res);
       return res.status(401).json({ message: "Unauthorized - Invalid Token" });
     }
 

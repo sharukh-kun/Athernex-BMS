@@ -1,9 +1,22 @@
 import Groq from "groq-sdk";
 import { buildWokwiEvidenceText } from "./wokwi-runner.service.js";
+import { formatBoardPinsForPrompt, selectBoardPinDefinition } from "../lib/arduino-boards.js";
 
-const groq = new Groq({
-  apiKey: process.env.GROQ_API_KEY
-});
+let groqClient = null;
+
+const getGroqClient = () => {
+  if (groqClient) {
+    return groqClient;
+  }
+
+  const apiKey = process.env.GROQ_API_KEY?.trim();
+  if (!apiKey) {
+    throw new Error("Missing GROQ_API_KEY. Add it to backend/.env before using AI endpoints.");
+  }
+
+  groqClient = new Groq({ apiKey });
+  return groqClient;
+};
 
 const cleanArray = (value) => {
   if (!Array.isArray(value)) return [];
@@ -13,6 +26,89 @@ const cleanArray = (value) => {
       .map(item => (typeof item === "string" ? item.trim() : ""))
       .filter(Boolean)
   )];
+};
+
+const toKeywordText = (...values) => {
+  return values
+    .flat()
+    .map((value) => (typeof value === "string" ? value.toLowerCase() : ""))
+    .join(" ");
+};
+
+const inferComponentsFallback = (project = {}) => {
+  const text = toKeywordText(
+    project?.description,
+    project?.ideaState?.summary,
+    project?.ideaState?.requirements
+  );
+
+  const baseBoard = /\besp32\b|\bdevkit\b|\bwroom\b|\bgpio\d+/i.test(text)
+    ? "ESP32 DevKit V1"
+    : "Arduino Uno";
+
+  const inferred = [
+    baseBoard,
+    "Breadboard",
+    "Jumper wires"
+  ];
+
+  if (/\bled\b|\bblink\b|\blight\b/.test(text)) inferred.push("LED");
+  if (/\bresistor\b|\bled\b/.test(text)) inferred.push("220 ohm resistor");
+  if (/\bbuzzer\b|\balarm\b|\balert\b/.test(text)) inferred.push("Piezo buzzer");
+  if (/\blcd\b|\boled\b|\bdisplay\b/.test(text)) inferred.push("I2C 16x2 LCD display module");
+  if (/\bultrasonic\b|\bdistance\b/.test(text)) inferred.push("HC-SR04 ultrasonic sensor");
+  if (/\btemperature\b|\bhumid/.test(text)) inferred.push("DHT11 sensor");
+  if (/\bservo\b/.test(text)) inferred.push("SG90 servo motor");
+  if (/\brelay\b/.test(text)) inferred.push("1-channel relay module");
+
+  return cleanArray(inferred);
+};
+
+const ensureComponentsReply = ({ architecture = "", components = [], reply = "" }) => {
+  const items = cleanArray(components);
+  const baseReply = String(reply || "").trim();
+  const componentsSection = [
+    "**Components list**",
+    ...items.map((item) => `- ${item}`)
+  ].join("\n");
+
+  if (!baseReply) {
+    const architectureLine = architecture ? `Architecture: ${architecture}` : "Architecture: Basic microcontroller setup with clear wiring blocks.";
+    return [
+      componentsSection,
+      "",
+      architectureLine,
+      "",
+      "**Connections**",
+      "- Connect each sensor/output module to Arduino power (5V) and GND.",
+      "- Connect signal pins from modules to the required Arduino digital/analog pins.",
+      "",
+      "**Expected output**",
+      "- System powers on and responds to input with the defined output behavior."
+    ].join("\n");
+  }
+
+  if (/components?\s*list/i.test(baseReply)) {
+    return baseReply;
+  }
+
+  return `${componentsSection}\n\n${baseReply}`;
+};
+
+const MAX_HISTORY_MESSAGES = 8;
+const MAX_HISTORY_CHARS = 2500;
+
+const buildConversationText = (messages = []) => {
+  const recent = Array.isArray(messages) ? messages.slice(-MAX_HISTORY_MESSAGES) : [];
+  const text = recent
+    .map((m) => `${m.role}: ${m.content}`)
+    .join("\n");
+
+  if (text.length <= MAX_HISTORY_CHARS) {
+    return text;
+  }
+
+  return text.slice(text.length - MAX_HISTORY_CHARS);
 };
 
 const stripThinking = (value = "") => {
@@ -38,43 +134,96 @@ const isTransitionToComponentsRequest = (text = "") => {
   return /(go to components|components section|move to components|switch to components)/i.test(String(text).toLowerCase());
 };
 
+const summarizeUserInput = (text = "") => {
+  const cleaned = String(text).replace(/\s+/g, " ").trim();
+  if (!cleaned) return "";
+  if (cleaned.length <= 90) return cleaned;
+  return `${cleaned.slice(0, 87)}...`;
+};
+
+const BUILD_CONFIRMATION_UNKNOWN = "build-phase-confirmation";
+const BUILD_CONFIRMATION_QUESTION = "Want me to generate the circuit and code for this?";
+
+const getBoardPromptContext = (project = {}, userInput = "") => {
+  const definition = selectBoardPinDefinition(project, userInput);
+
+  return {
+    boardName: definition?.board || "Arduino Uno (ATmega328P)",
+    pinKnowledge: formatBoardPinsForPrompt(definition)
+  };
+};
+
+const hasPrematureBuildDetails = (text = "") => {
+  const value = String(text).toLowerCase();
+  return /(pin\s*\d+|gpio|wiring|wire it|connect\s+to\s+pin|breadboard\s+layout|schematic|diagram|code\s*[:\n]|sketch\.ino|cpp|void\s+setup\s*\(|components?\s*list)/i.test(value);
+};
+
+const isBuildConfirmationAccepted = (text = "") => {
+  const value = String(text).toLowerCase().trim();
+  return /^(yes|yeah|yep|sure|ok|okay|go ahead|proceed|continue|start|build it|step by step|step-by-step|generate circuit and code|generate it)/i.test(value);
+};
+
+const buildShortConceptReply = ({ summary = "", requirements = [] }) => {
+  const conciseSummary = summary || "Beginner-friendly hardware concept based on your idea.";
+  const whatItDoes = conciseSummary;
+  const howItWorks = "Sensor/input reads data, controller decides, then output shows or alerts.";
+  const improvements = cleanArray(requirements).slice(0, 2);
+  const improvementLines = improvements.length > 0
+    ? improvements.map((item, index) => `${index + 1}. ${item}`).join("\n")
+    : "1. Add buzzer alerts\n2. Add display feedback";
+
+  return [
+    "That’s a nice idea — here’s how it could work:",
+    "",
+    "Project: Smart Hardware Starter",
+    "",
+    "What it does:",
+    whatItDoes,
+    "",
+    "How it works:",
+    howItWorks,
+    "",
+    "You could also:",
+    `- ${improvementLines.split("\n")[0].replace(/^\d+\.\s*/, "")}`,
+    `- ${improvementLines.split("\n")[1]?.replace(/^\d+\.\s*/, "") || "Add display feedback"}`,
+    "",
+    BUILD_CONFIRMATION_QUESTION,
+  ].join("\n");
+};
+
 const buildFallbackIdeationReply = ({ summary, requirements, unknowns, question, userInput }) => {
+  const conciseUserInput = summarizeUserInput(userInput);
+
   if (isTransitionToComponentsRequest(userInput)) {
     if (unknowns.length === 0) {
       return "Ideation is finalized. Open the Components section to get wiring, connections, and expected output details.";
     }
 
-    const topUnknowns = unknowns.slice(0, 3).join(", ");
-    return `Before Components section, I still need: ${topUnknowns}. If you want, I can assume safe defaults and continue.`;
+    return `Before Components section, I need your confirmation. ${BUILD_CONFIRMATION_QUESTION}`;
   }
 
   if (isIdeaOnlyRequest(userInput)) {
-    if (summary) {
-      return `High level: ${summary}`;
-    }
-
-    if (requirements.length > 0) {
-      return `High level idea: ${requirements.slice(0, 4).join("; ")}`;
-    }
-
-    if (unknowns.length > 0) {
-      return `High level idea: use the known parts to build a simple, safe concept and defer implementation details until later.`;
-    }
+    return buildShortConceptReply({ summary, requirements });
   }
 
-  if (question) {
-    return question;
+  if (conciseUserInput) {
+    return [
+      `Plan updated from your input: ${conciseUserInput}`,
+      buildShortConceptReply({ summary, requirements })
+    ].join("\n");
   }
 
   if (unknowns.length > 0) {
-    return `We can continue with assumptions. The most important open detail is: ${unknowns[0]}.`;
+    const base = buildShortConceptReply({ summary, requirements });
+    return question ? `${base}\nClarification: ${question}` : base;
   }
 
-  return "Ideation is updated with practical assumptions. Continue in Components section for implementation details.";
+  return buildShortConceptReply({ summary, requirements });
 };
 
 const applyIdeationGuards = (project, userInput, output) => {
   const sanitized = { ...output };
+  const confirmed = isBuildConfirmationAccepted(userInput);
 
   const recentAiMessages = (project.messages || [])
     .filter(m => m.role === "ai")
@@ -97,6 +246,41 @@ const applyIdeationGuards = (project, userInput, output) => {
       question: sanitized.question,
       userInput
     });
+  }
+
+  const tooLong = sanitized.assistantReply.length > 500;
+  if (tooLong) {
+    sanitized.assistantReply = buildFallbackIdeationReply({
+      summary: sanitized.summary,
+      requirements: sanitized.requirements,
+      unknowns: sanitized.unknowns,
+      question: sanitized.question,
+      userInput
+    });
+  }
+
+  if (!confirmed && hasPrematureBuildDetails(sanitized.assistantReply)) {
+    sanitized.assistantReply = buildFallbackIdeationReply({
+      summary: sanitized.summary,
+      requirements: sanitized.requirements,
+      unknowns: sanitized.unknowns,
+      question: sanitized.question,
+      userInput
+    });
+  }
+
+  if (!confirmed) {
+    sanitized.unknowns = cleanArray([...sanitized.unknowns, BUILD_CONFIRMATION_UNKNOWN]);
+    sanitized.question = BUILD_CONFIRMATION_QUESTION;
+
+    if (!new RegExp(BUILD_CONFIRMATION_QUESTION.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i").test(sanitized.assistantReply)) {
+      sanitized.assistantReply = `${sanitized.assistantReply}\n${BUILD_CONFIRMATION_QUESTION}`.trim();
+    }
+  } else {
+    sanitized.unknowns = cleanArray(sanitized.unknowns).filter((item) => item !== BUILD_CONFIRMATION_UNKNOWN);
+    if (sanitized.question === BUILD_CONFIRMATION_QUESTION) {
+      sanitized.question = "";
+    }
   }
 
   return sanitized;
@@ -132,17 +316,27 @@ const safeParse = (text) => {
 /*
 COMMON CALL
 */
-const callAI = async (prompt) => {
-  const res = await groq.chat.completions.create({
-    model: process.env.GROQ_MODEL || "gpt-4o",
+const callAI = async (prompt, options = {}) => {
+  const {
+    maxCompletionTokens = 800,
+    temperature = 0.2,
+    topP = 0.9
+  } = options;
+
+  const groq = getGroqClient();
+  const completion = await groq.chat.completions.create({
+    model: process.env.GROQ_MODEL || "llama-3.1-8b-instant",
     messages: [{ role: "user", content: prompt }],
-    temperature: 0.2
+    temperature,
+    max_completion_tokens: maxCompletionTokens,
+    top_p: topP
   });
 
-  return res.choices[0].message.content.trim();
+  const text = completion.choices?.[0]?.message?.content || "";
+  return String(text).trim();
 };
 
-const normalizeIdeationOutput = (raw, userInput, fallbackQuestion = "Please provide the most important missing detail so I can continue.") => {
+const normalizeIdeationOutput = (raw, userInput, fallbackQuestion = BUILD_CONFIRMATION_QUESTION) => {
   const summary = typeof raw?.summary === "string" ? raw.summary.trim() : "";
   const requirements = cleanArray(raw?.requirements);
   const unknowns = cleanArray(raw?.unknowns);
@@ -160,7 +354,7 @@ const normalizeIdeationOutput = (raw, userInput, fallbackQuestion = "Please prov
   }
 
   if (!assistantReply) {
-    assistantReply = question || "I updated the ideation context with practical defaults.";
+    assistantReply = question || "Project concept updated with practical defaults.";
   }
 
   if (isIdeaOnlyRequest(userInput)) {
@@ -192,53 +386,70 @@ IDEATION (your original upgraded)
 */
 export const processInput = async (project, userInput) => {
 
-  const messagesText = project.messages
-    .map(m => `${m.role}: ${m.content}`)
-    .join("\n");
+  const messagesText = buildConversationText(project.messages);
+  const boardContext = getBoardPromptContext(project, userInput);
 
   const prompt = `
-You are a hardware system design AI.
+  You are a project designer AI that turns user ideas into structured hardware projects.
+  You are NeuroBoard AI, a friendly and smart helper that guides users in building electronics projects from their ideas.
+  Be friendly, clear, slightly conversational, and easy for beginners to follow.
 
-You MUST behave like a strict engineer.
+  Primary goal:
+  Guide users from idea -> clear project concept -> build flow.
 
-GOAL:
-Convert a vague idea into a COMPLETE, BUILDABLE hardware system.
+  INTERACTION RULES (MANDATORY):
+  1) Idea -> Project Concept first.
+    - Start naturally, like a human helper.
+    - Briefly acknowledge the idea.
+    - Immediately shape the idea into a project concept.
+    - Do NOT jump into components, wiring, or code.
+    - Ask at most 1-2 simple follow-up questions only if absolutely necessary.
 
-ADDITIONAL BEHAVIOR:
-- If user asks for ideas with specific parts (example: "3 LEDs, Arduino, small display"), propose concrete feasible ideas with those exact constraints.
-- If constraints are unrealistic or too limited, clearly explain why and propose the smallest viable changes.
-- If user says "you decide", choose practical defaults and explicitly document those defaults in requirements.
-- If user asks "what can I do" or "just idea", provide 3 practical concept options based on known parts and avoid blocking on fine-grained electrical specs.
-- Keep ideation conceptual. Do NOT provide step-by-step wiring, pin mapping, resistor calculations, or circuit completion instructions in ideation mode.
-- If user asks implementation details in ideation mode, provide high-level behavior only and direct them to Components section for build details.
-- If user asks to move to Components section:
-  - If unknowns are empty: confirm ideation finalized and direct them to Components section.
-  - If unknowns remain: clearly list top missing details instead of generic status text.
+  2) Convert idea into a clear concept using this exact structure:
+    - Project: <name>
+    - What it does:
+    - How it works:
 
-PROCESS (MANDATORY):
-1. Understand user input
-2. Update structured state
-3. Identify gaps (unknowns)
-4. Remove resolved unknowns
-5. Add new unknowns if needed
-6. If unknowns remain, ask EXACTLY ONE next question (most critical gap)
-7. If unknowns are empty, finalize and do not ask a question
+  3) Suggest improvements without overwhelming:
+    - Provide 1-2 useful upgrades only.
+    - Keep them light and optional.
 
-SPECIAL INTENT:
-- If the user asks for a high-level answer, idea only, or summary, do not ask a follow-up question unless absolutely required to avoid unsafe assumptions.
-- In that case, return a short concept summary and keep the response inside ideation mode.
+  4) Always confirm before build phase:
+    - End with exactly: "Want me to generate the circuit and code for this?"
+    - Do NOT move to components/circuit/code unless user agrees.
 
-RULES:
-- No assumptions without confirmation
-- No multiple questions
-- No vague questions
-- Unknowns must be specific
-- Requirements must be concrete
-- Keep summary updated and precise
-- Do not repeat the same question if it was already asked recently; either choose a different critical unknown or proceed with conservative defaults.
-- Never use generic reply text such as "Ideation state updated."
-- NEVER output anything outside JSON
-- DO NOT include <think> tags
+  5) Build phase ordering (for future only after confirmation):
+    - Components -> Circuit -> Code
+
+  6) Keep direction tight:
+    - Keep responses short and structured.
+    - Use easy words.
+    - Avoid long paragraphs.
+    - Avoid overly robotic or textbook language.
+
+  TONE AND STYLE:
+  - Friendly, clear, and slightly conversational
+  - Beginner-friendly words
+  - Keep responses short and practical
+
+  OUTPUT CONSTRAINTS:
+  - Keep assistantReply concise.
+  - assistantReply must include this structure in order:
+    1) Short friendly intro
+    2) Project
+    2) What it does
+    3) How it works
+    4) You could also
+    5) Final confirmation question
+  - Keep unknowns specific.
+  - If user has not confirmed build, keep an unknown indicating pending build confirmation.
+  - Never include component lists, pin mappings, wiring steps, or code while awaiting confirmation.
+  - If user asks pin-related questions before confirmation, acknowledge only at high level and keep build confirmation pending.
+  - NEVER output anything outside JSON.
+  - DO NOT include <think> tags.
+
+PIN DIAGRAM KNOWLEDGE (REFERENCE ONLY, DO NOT DUMP IN REPLY DURING IDEATION):
+${boardContext.pinKnowledge}
 
 OUTPUT STRICT JSON:
 
@@ -263,7 +474,7 @@ NEW USER INPUT:
 ${userInput}
 `;
 
-  const text = await callAI(prompt);
+  const text = await callAI(prompt, { maxCompletionTokens: 320, temperature: 0.1, topP: 0.85 });
   const parsed = safeParse(text);
 
   const normalized = normalizeIdeationOutput(parsed, userInput);
@@ -280,10 +491,9 @@ COMPONENTS AI
 */
 export const processComponents = async (project, userInput) => {
 
-  const messagesText = (project.componentsMessages || [])
-    .map(m => `${m.role}: ${m.content}`)
-    .join("\n");
+  const messagesText = buildConversationText(project.componentsMessages || []);
   const runnerEvidence = buildWokwiEvidenceText(project);
+  const boardContext = getBoardPromptContext(project, userInput);
 
   const prompt = `
 You are a hardware systems architect.
@@ -296,13 +506,20 @@ RULES:
 - Be precise and practical
 - No vague components
 - Output must be buildable
+- Use exact valid pin labels from the selected board reference. Never invent pins.
 - Include concise implementation guidance in reply.
+- Use short, clear sentences.
+- Highlight important labels using markdown bold like **Connections** and **Expected output**.
+- Keep the reply skimmable with small sections and bullet points.
 - In reply, include two labeled sections:
   1) "Connections" (what connects to what)
   2) "Expected output" (what user sees/gets after connection)
 - Treat WOKWI RUNNER EVIDENCE as hard evidence from previous simulation/lint runs.
 - If evidence conflicts with assumptions, prefer evidence.
 - If lint/run/scenario reports failures, mention the critical failure in reply and provide corrective wiring/build steps.
+
+SELECTED BOARD PIN REFERENCE (SOURCE OF TRUTH):
+${boardContext.pinKnowledge}
 
 OUTPUT STRICT JSON:
 
@@ -329,14 +546,14 @@ USER INPUT:
 ${userInput}
 `;
 
-  const text = await callAI(prompt);
+  const text = await callAI(prompt, { maxCompletionTokens: 1100, temperature: 0.2, topP: 0.9 });
 
   try {
     const parsed = safeParse(text);
-    return normalizeComponentsOutput(parsed, stripThinking(text));
+    return normalizeComponentsOutput(parsed, stripThinking(text), project);
   } catch {
     // Keep chat flow alive when model returns plain text instead of strict JSON.
-    return normalizeComponentsOutput({}, stripThinking(text));
+    return normalizeComponentsOutput({}, stripThinking(text), project);
   }
 };
 
@@ -348,10 +565,9 @@ DESIGN AI
 */
 export const processDesign = async (project, userInput, wokwiContext = null) => {
 
-  const messagesText = (project.designMessages || [])
-    .map(m => `${m.role}: ${m.content}`)
-    .join("\n");
+  const messagesText = buildConversationText(project.designMessages || []);
   const runnerEvidence = buildWokwiEvidenceText(project);
+  const boardContext = getBoardPromptContext(project, userInput);
 
   const prompt = `
 You are a Wokwi hardware layout assistant.
@@ -363,6 +579,9 @@ RULES:
 - Use ideaState + componentsState + the project description as circuit context.
 - Treat LIVE WOKWI CIRCUIT CONTEXT as the source of truth for parts and connections.
 - Be practical, concise, and hardware-focused.
+- Use short, clear sentences.
+- Highlight key steps/labels using markdown bold where helpful.
+- Keep answers easy to scan with small bullets.
 - Do not produce app UI/screens/pages/dashboard concepts.
 - Do not drift into generic product design language.
 - Always describe what to place, how to wire it, what to check, and what the expected simulator behavior is.
@@ -375,6 +594,7 @@ RULES:
 - Treat WOKWI RUNNER EVIDENCE as hard evidence from real simulations/tests.
 - If evidence indicates runtime/lint failure, mention the top failure and prioritize fixes before new feature steps.
 - If serial evidence includes errors, include one verification step that proves the fix in simulator output.
+- Use exact valid pin labels from the selected board reference. Never invent pins.
 
 OUTPUT STRICT JSON:
 
@@ -417,9 +637,12 @@ ${messagesText}
 
 USER INPUT:
 ${userInput}
+
+SELECTED BOARD PIN REFERENCE (SOURCE OF TRUTH):
+${boardContext.pinKnowledge}
 `;
 
-  const text = await callAI(prompt);
+  const text = await callAI(prompt, { maxCompletionTokens: 700, temperature: 0.2, topP: 0.9 });
   const livePartTypes = (wokwiContext?.partTypes || []).map((item) => String(item).toLowerCase());
 
   const hasPartType = (pattern) => livePartTypes.some((part) => pattern.test(part));
@@ -472,9 +695,14 @@ ${userInput}
   }
 };
 
-const normalizeComponentsOutput = (raw, fallbackReply = "I generated components guidance. Ask a follow-up for exact wiring and expected behavior.") => {
+const normalizeComponentsOutput = (
+  raw,
+  fallbackReply = "I generated components guidance. Ask a follow-up for exact wiring and expected behavior.",
+  project = {}
+) => {
   const architecture = typeof raw?.architecture === "string" ? raw.architecture.trim() : "";
-  const components = cleanArray(raw?.components);
+  const parsedComponents = cleanArray(raw?.components);
+  const components = parsedComponents.length > 0 ? parsedComponents : inferComponentsFallback(project);
   const apiEndpoints = cleanArray(raw?.apiEndpoints);
 
   const formatReplyValue = (value) => {
@@ -524,6 +752,7 @@ const normalizeComponentsOutput = (raw, fallbackReply = "I generated components 
   if (!reply) {
     reply = fallbackReply;
   }
+  reply = ensureComponentsReply({ architecture, components, reply });
 
   return {
     architecture,

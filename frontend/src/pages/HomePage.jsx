@@ -4,6 +4,7 @@ import { useThemeStore } from "../store/useThemeStore";
 import axios from "axios";
 import { useEffect, useState } from "react";
 import toast from "react-hot-toast";
+import CreateProjectModal from "../components/CreateProjectModal";
 
 export default function HomePage() {
   const navigate = useNavigate();
@@ -13,6 +14,7 @@ export default function HomePage() {
   const [projects, setProjects] = useState([]);
   const [loading, setLoading] = useState(true);
   const [isCreating, setIsCreating] = useState(false);
+  const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
 
   // 🔥 fetch user projects
   useEffect(() => {
@@ -34,17 +36,8 @@ export default function HomePage() {
   }, []);
 
   // 🔥 create project
-  const handleCreateProject = async () => {
+  const handleCreateProject = async (description) => {
     if (isCreating) return;
-
-    const descriptionInput = window.prompt("Project name", "My new project");
-    if (!descriptionInput) return;
-
-    const description = descriptionInput.trim();
-    if (!description) {
-      toast.error("Project name is required");
-      return;
-    }
 
     try {
       setIsCreating(true);
@@ -54,6 +47,7 @@ export default function HomePage() {
         { withCredentials: true }
       );
 
+      setIsCreateModalOpen(false);
       navigate(`/project/${res.data.projectId}`);
     } catch (err) {
       console.error("Create Project Error:", err);
@@ -122,7 +116,7 @@ export default function HomePage() {
 
           <div className="flex items-center gap-3">
             <button
-              onClick={handleCreateProject}
+              onClick={() => setIsCreateModalOpen(true)}
               disabled={isCreating}
               className={`rounded-lg px-4 py-2 text-xs font-semibold transition ${
                 isDark
@@ -275,7 +269,7 @@ export default function HomePage() {
             <p className="text-base font-semibold">No projects yet</p>
             <p className="mt-2">Use the New Project button to create your first workspace.</p>
             <button
-              onClick={handleCreateProject}
+              onClick={() => setIsCreateModalOpen(true)}
               disabled={isCreating}
               className={`mt-5 rounded-full px-5 py-2.5 text-xs font-semibold transition ${
                 isDark
@@ -288,6 +282,13 @@ export default function HomePage() {
           </div>
         )}
       </div>
+
+      <CreateProjectModal
+        isOpen={isCreateModalOpen}
+        isSubmitting={isCreating}
+        onClose={() => setIsCreateModalOpen(false)}
+        onSubmit={handleCreateProject}
+      />
     </div>
   );
 }

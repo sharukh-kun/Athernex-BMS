@@ -3,7 +3,7 @@ import { motion } from "framer-motion";
 import { useAuthStore } from "../store/useAuthStore";
 
 export default function AuthPage() {
-  const { login, signup } = useAuthStore();
+  const { login, signup, loginWithGoogle, isLoggingIn } = useAuthStore();
 
   const [isLogin, setIsLogin] = useState(true);
   const [theme, setTheme] = useState("dark");
@@ -156,6 +156,27 @@ export default function AuthPage() {
           }`}
         >
           {isLogin ? "Login" : "Create account"}
+        </button>
+
+        <div className="mt-4 flex items-center gap-3">
+          <div className={`h-px flex-1 ${isDark ? "bg-white/10" : "bg-black/10"}`} />
+          <span className={`text-[11px] uppercase tracking-[0.16em] ${isDark ? "text-[#777]" : "text-[#888]"}`}>
+            Or
+          </span>
+          <div className={`h-px flex-1 ${isDark ? "bg-white/10" : "bg-black/10"}`} />
+        </div>
+
+        <button
+          type="button"
+          onClick={loginWithGoogle}
+          disabled={isLoggingIn}
+          className={`mt-4 w-full rounded-lg border py-2.5 text-sm font-semibold transition disabled:cursor-not-allowed disabled:opacity-60 ${
+            isDark
+              ? "border-white/10 bg-[#1f1f1f] hover:bg-[#262626]"
+              : "border-black/10 bg-white hover:bg-[#f8f8f8]"
+          }`}
+        >
+          Continue with Google
         </button>
 
         <p className={`mt-4 text-center text-xs ${

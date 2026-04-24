@@ -1,6 +1,7 @@
 import { useEffect, useRef } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { useThemeStore } from "../store/useThemeStore";
+import ChatRichText from "./ChatRichText";
 
 export default function DesignChat({
   project,
@@ -61,8 +62,8 @@ export default function DesignChat({
                 <div className={`mb-1 text-[10px] font-semibold uppercase tracking-[0.18em] ${isDark ? "text-[#8f8f8f]" : "text-[#777]"}`}>
                   {message.role === "user" ? "You" : "Design AI"}
                 </div>
-                <div className={`whitespace-pre-wrap text-sm leading-relaxed ${message.role === "user" ? (isDark ? "text-[#f2f2f2]" : "text-[#111]") : (isDark ? "text-[#e0e0e0]" : "text-[#222]")}`}>
-                  {message.content}
+                <div className={`${message.role === "user" ? (isDark ? "text-[#f2f2f2]" : "text-[#111]") : (isDark ? "text-[#e0e0e0]" : "text-[#222]")}`}>
+                  <ChatRichText text={message.content} isDark={isDark} />
                 </div>
               </div>
             </motion.div>
