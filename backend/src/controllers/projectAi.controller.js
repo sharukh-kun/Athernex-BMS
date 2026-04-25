@@ -235,10 +235,24 @@ Rules:
 - Prefer editing main.ino unless another file is clearly requested.
 - If edit intent is false, all values in updates must be empty strings.
 - If edit intent is true, only changed files should be returned. Leave untouched files as empty strings.
+- If user asks for pin explanation, include a clear structured explanation in reply and optionally update pins.csv.
+- If user asks for assembly help, include a detailed assembly explanation in reply and optionally update assembly.md.
+- For pins.csv updates, include rich descriptive columns and explanations for each mapping.
+- For assembly.md updates, produce a detailed guide suitable for real assembly across project types.
 - Never put conversational explanation, project ideation text, or prose inside source files.
 - main.ino must contain Arduino sketch code only.
 - Return strict JSON only.
 - Do not mention internal chain-of-thought.
+
+Required structure when updating pins.csv:
+- Header must include at least: component,pin,board_pin,direction,signal_type,voltage,explanation
+- Include one row per practical connection.
+- explanation must briefly explain why the mapping is used.
+
+Required structure when updating assembly.md:
+- Include sections for: project intent, required hardware, pre-checks, pin map summary, step-by-step wiring, upload steps, validation, troubleshooting, and safety.
+- Steps must be specific and actionable, not generic one-liners.
+- Ensure wording works for different project categories (sensor, actuator, communication, automation).
 
 Mode:
 ${mode}
@@ -293,7 +307,7 @@ const callProjectAI = async ({ project, userInput, context, mode, workspaceFiles
     model: process.env.GROQ_MODEL || "llama-3.1-8b-instant",
     messages: [{ role: "user", content: prompt }],
     temperature: 0.2,
-    max_completion_tokens: 1200
+    max_completion_tokens: 2200
   });
 
   const rawText = response.choices?.[0]?.message?.content || "";

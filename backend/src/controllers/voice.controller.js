@@ -1,4 +1,4 @@
-import { getVoiceRuntimeHealth, synthesizeWithElevenLabs, transcribeWithDeepgram } from "../services/voice.service.js";
+import { getVoiceRuntimeHealth, synthesizeWithElevenLabs, synthesizeWithMurf, transcribeWithDeepgram } from "../services/voice.service.js";
 
 const buildRequestId = () => `voice-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
@@ -72,20 +72,40 @@ export const synthesizeAudio = async (req, res) => {
   try {
     const {
       text,
+      provider = "",
       voiceId = "",
+      locale = "en-US",
+      model = "FALCON",
+      format = "MP3",
+      sampleRate = 24000,
+      channelType = "MONO",
       modelId = "eleven_multilingual_v2",
       outputFormat = "mp3_44100_128"
     } = req.body || {};
 
-    const result = await synthesizeWithElevenLabs({
-      text,
-      voiceId,
-      modelId,
-      outputFormat
-    });
+    const resolvedProvider = String(
+      provider || process.env.TTS_PROVIDER || (process.env.MURF_API_KEY?.trim() ? "murf" : "elevenlabs")
+    ).trim().toLowerCase();
+
+    const result = resolvedProvider === "murf"
+      ? await synthesizeWithMurf({
+          text,
+          voiceId,
+          locale,
+          model,
+          format,
+          sampleRate,
+          channelType
+        })
+      : await synthesizeWithElevenLabs({
+          text,
+          voiceId,
+          modelId,
+          outputFormat
+        });
 
     res.json({
-      provider: "elevenlabs",
+      provider: resolvedProvider,
       contentType: result.contentType,
       audioBase64: result.audioBase64
     });

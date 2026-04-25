@@ -2,11 +2,7 @@
   "ARDUINO_MEGA": {
     "wokwiType": "wokwi-arduino-mega",
     "attrs": {
-      "led13": { "type": "boolean", "default": false },
-      "ledRX": { "type": "boolean", "default": false },
-      "ledTX": { "type": "boolean", "default": false },
-      "ledPower": { "type": "boolean", "default": false },
-      "resetPressed": { "type": "boolean", "default": false }
+      
     },
     "pins": [
       { "name": "SCL", "signals": [{ "type": "i2c", "role": "SCL" }] },
@@ -96,6 +92,426 @@
       { "name": "A15", "signals": [{ "type": "analog", "channel": 15 }] }
     ],
     "category": "controller"
+  },
+  "ARDUINO_NANO": {
+    "wokwiType": "wokwi-arduino-nano",
+    "attrs": {
+      "led13": { "type": "boolean", "default": false },
+      "ledRX": { "type": "boolean", "default": false },
+      "ledTX": { "type": "boolean", "default": false },
+      "ledPower": { "type": "boolean", "default": false },
+      "resetPressed": { "type": "boolean", "default": false }
+    },
+    "pins": [
+      { "name": "12", "signals": [{ "type": "spi", "role": "MISO" }] },
+      { "name": "11", "signals": [{ "type": "spi", "role": "MOSI" }, { "type": "pwm" }] },
+      { "name": "10", "signals": [{ "type": "spi", "role": "SS" }, { "type": "pwm" }] },
+      { "name": "9", "signals": [{ "type": "pwm" }] },
+      { "name": "8", "signals": [] },
+      { "name": "7", "signals": [] },
+      { "name": "6", "signals": [{ "type": "pwm" }] },
+      { "name": "5", "signals": [{ "type": "pwm" }] },
+      { "name": "4", "signals": [] },
+      { "name": "3", "signals": [{ "type": "pwm" }] },
+      { "name": "2", "signals": [] },
+      { "name": "GND.2", "signals": [{ "type": "power", "role": "GND" }] },
+      { "name": "RESET.2", "signals": [] },
+      { "name": "0", "signals": [{ "type": "usart", "role": "RX" }] },
+      { "name": "1", "signals": [{ "type": "usart", "role": "TX" }] },
+      { "name": "13", "signals": [{ "type": "spi", "role": "SCK" }] },
+      { "name": "3.3V", "signals": [{ "type": "power", "role": "VCC", "voltage": 3.3 }] },
+      { "name": "AREF", "signals": [] },
+      { "name": "A0", "signals": [{ "type": "analog", "channel": 0 }] },
+      { "name": "A1", "signals": [{ "type": "analog", "channel": 1 }] },
+      { "name": "A2", "signals": [{ "type": "analog", "channel": 2 }] },
+      { "name": "A3", "signals": [{ "type": "analog", "channel": 3 }] },
+      { "name": "A4", "signals": [{ "type": "analog", "channel": 4 }, { "type": "i2c", "role": "SDA" }] },
+      { "name": "A5", "signals": [{ "type": "analog", "channel": 5 }, { "type": "i2c", "role": "SCL" }] },
+      { "name": "A6", "signals": [{ "type": "analog", "channel": 6 }] },
+      { "name": "A7", "signals": [{ "type": "analog", "channel": 7 }] },
+      { "name": "5V", "signals": [{ "type": "power", "role": "VCC", "voltage": 5 }] },
+      { "name": "RESET", "signals": [] },
+      { "name": "GND.1", "signals": [{ "type": "power", "role": "GND" }] },
+      { "name": "VIN", "signals": [{ "type": "power", "role": "VCC" }] }
+    ],
+    "category": "controller"
+  },
+  "ARDUINO_UNO": {
+    "wokwiType": "wokwi-arduino-uno",
+    "attrs": {
+      "led13": { "type": "boolean", "default": false },
+      "ledRX": { "type": "boolean", "default": false },
+      "ledTX": { "type": "boolean", "default": false },
+      "ledPower": { "type": "boolean", "default": false },
+      "resetPressed": { "type": "boolean", "default": false }
+    },
+    "pins": [
+      { "name": "A5.2", "signals": [{ "type": "analog", "channel": 5 }, { "type": "i2c", "role": "SCL" }] },
+      { "name": "A4.2", "signals": [{ "type": "analog", "channel": 4 }, { "type": "i2c", "role": "SDA" }] },
+      { "name": "AREF", "signals": [] },
+      { "name": "GND.1", "signals": [{ "type": "power", "role": "GND" }] },
+      { "name": "13", "signals": [{ "type": "spi", "role": "SCK" }] },
+      { "name": "12", "signals": [{ "type": "spi", "role": "MISO" }] },
+      { "name": "11", "signals": [{ "type": "spi", "role": "MOSI" }, { "type": "pwm" }] },
+      { "name": "10", "signals": [{ "type": "spi", "role": "SS" }, { "type": "pwm" }] },
+      { "name": "9", "signals": [{ "type": "pwm" }] },
+      { "name": "8", "signals": [] },
+      { "name": "7", "signals": [] },
+      { "name": "6", "signals": [{ "type": "pwm" }] },
+      { "name": "5", "signals": [{ "type": "pwm" }] },
+      { "name": "4", "signals": [] },
+      { "name": "3", "signals": [{ "type": "pwm" }] },
+      { "name": "2", "signals": [] },
+      { "name": "1", "signals": [{ "type": "usart", "role": "TX" }] },
+      { "name": "0", "signals": [{ "type": "usart", "role": "RX" }] },
+      { "name": "IOREF", "signals": [] },
+      { "name": "RESET", "signals": [] },
+      { "name": "3.3V", "signals": [{ "type": "power", "role": "VCC", "voltage": 3.3 }] },
+      { "name": "5V", "signals": [{ "type": "power", "role": "VCC", "voltage": 5 }] },
+      { "name": "GND.2", "signals": [{ "type": "power", "role": "GND" }] },
+      { "name": "GND.3", "signals": [{ "type": "power", "role": "GND" }] },
+      { "name": "VIN", "signals": [{ "type": "power", "role": "VCC" }] },
+      { "name": "A0", "signals": [{ "type": "analog", "channel": 0 }] },
+      { "name": "A1", "signals": [{ "type": "analog", "channel": 1 }] },
+      { "name": "A2", "signals": [{ "type": "analog", "channel": 2 }] },
+      { "name": "A3", "signals": [{ "type": "analog", "channel": 3 }] },
+      { "name": "A4", "signals": [{ "type": "analog", "channel": 4 }, { "type": "i2c", "role": "SDA" }] },
+      { "name": "A5", "signals": [{ "type": "analog", "channel": 5 }, { "type": "i2c", "role": "SCL" }] }
+    ],
+    "category": "controller"
+  },
+  "BUZZER": {
+    "wokwiType": "wokwi-buzzer",
+    "attrs": {
+      "hasSignal": { "type": "boolean", "default": false }
+    },
+    "pins": [
+      { "name": "1", "signals": [] },
+      { "name": "2", "signals": [] }
+    ],
+    "category": "actuator"
+  },
+  "DIP_SWITCH_8": {
+    "wokwiType": "wokwi-dip-switch-8",
+    "attrs": {
+      "values": { "type": "array", "default": [0, 0, 0, 0, 0, 0, 0, 0] }
+    },
+    "pins": [
+      { "name": "1a", "signals": [] },
+      { "name": "2a", "signals": [] },
+      { "name": "3a", "signals": [] },
+      { "name": "4a", "signals": [] },
+      { "name": "5a", "signals": [] },
+      { "name": "6a", "signals": [] },
+      { "name": "7a", "signals": [] },
+      { "name": "8a", "signals": [] },
+      { "name": "8b", "signals": [] },
+      { "name": "7b", "signals": [] },
+      { "name": "6b", "signals": [] },
+      { "name": "5b", "signals": [] },
+      { "name": "4b", "signals": [] },
+      { "name": "3b", "signals": [] },
+      { "name": "2b", "signals": [] },
+      { "name": "1b", "signals": [] }
+    ],
+    "category": "input"
+  },
+  "STEPPER_MOTOR": {
+    "wokwiType": "wokwi-stepper-motor",
+    "attrs": {
+      "arrow": { "type": "string", "default": "" },
+      "display": { "type": "string", "default": "steps" },
+      "gearRatio": { "type": "string", "default": "1:1" },
+      "size": { "type": "string", "default": "23" }
+    },
+    "pins": [
+      { "name": "A-", "signals": [] },
+      { "name": "A+", "signals": [] },
+      { "name": "B+", "signals": [] },
+      { "name": "B-", "signals": [] }
+    ],
+    "category": "actuator"
+  },
+  "A4988_DRIVER": {
+    "wokwiType": "wokwi-a4988",
+    "attrs": {},
+    "pins": [
+      { "name": "ENABLE", "signals": [] },
+      { "name": "MS1", "signals": [] },
+      { "name": "MS2", "signals": [] },
+      { "name": "MS3", "signals": [] },
+      { "name": "RESET", "signals": [] },
+      { "name": "SLEEP", "signals": [] },
+      { "name": "STEP", "signals": [] },
+      { "name": "DIR", "signals": [] },
+      { "name": "GND", "signals": [{ "type": "power", "role": "GND" }] },
+      { "name": "VDD", "signals": [{ "type": "power", "role": "VCC" }] },
+      { "name": "1B", "signals": [] },
+      { "name": "1A", "signals": [] },
+      { "name": "2A", "signals": [] },
+      { "name": "2B", "signals": [] },
+      { "name": "VMOT", "signals": [] }
+    ],
+    "category": "actuator"
+  },
+  "DS1307": {
+    "wokwiType": "wokwi-ds1307",
+    "attrs": {},
+    "pins": [
+      { "name": "GND", "signals": [{ "type": "power", "role": "GND" }] },
+      { "name": "5V", "signals": [{ "type": "power", "role": "VCC", "voltage": 5 }] },
+      { "name": "SDA", "signals": [{ "type": "i2c", "role": "SDA" }] },
+      { "name": "SCL", "signals": [{ "type": "i2c", "role": "SCL" }] },
+      { "name": "SQW", "signals": [] }
+    ],
+    "category": "logic"
+  },
+  "IR_RECEIVER": {
+    "wokwiType": "wokwi-ir-receiver",
+    "attrs": {},
+    "pins": [
+      { "name": "GND", "signals": [{ "type": "power", "role": "GND" }] },
+      { "name": "VCC", "signals": [{ "type": "power", "role": "VCC" }] },
+      { "name": "DAT", "signals": [] }
+    ],
+    "category": "input"
+  },
+  "LED": {
+    "wokwiType": "wokwi-led",
+    "attrs": {
+      "value": { "type": "boolean", "default": false },
+      "brightness": { "type": "number", "default": 1.0 },
+      "color": { "type": "string", "default": "red" },
+      "lightColor": { "type": "string", "default": null },
+      "label": { "type": "string", "default": "" },
+      "flip": { "type": "boolean", "default": false }
+    },
+    "pins": [
+      { "name": "A", "signals": [], "description": "Anode" },
+      { "name": "C", "signals": [], "description": "Cathode" }
+    ],
+    "category": "actuator"
+  },
+  "LED_BAR_GRAPH": {
+    "wokwiType": "wokwi-led-bar-graph",
+    "attrs": {
+      "color": { "type": "string", "default": "red" },
+      "offColor": { "type": "string", "default": "#444" },
+      "values": { "type": "array", "default": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0] }
+    },
+    "pins": [
+      { "name": "A1", "signals": [], "description": "Anode 1" },
+      { "name": "A2", "signals": [], "description": "Anode 2" },
+      { "name": "A3", "signals": [], "description": "Anode 3" },
+      { "name": "A4", "signals": [], "description": "Anode 4" },
+      { "name": "A5", "signals": [], "description": "Anode 5" },
+      { "name": "A6", "signals": [], "description": "Anode 6" },
+      { "name": "A7", "signals": [], "description": "Anode 7" },
+      { "name": "A8", "signals": [], "description": "Anode 8" },
+      { "name": "A9", "signals": [], "description": "Anode 9" },
+      { "name": "A10", "signals": [], "description": "Anode 10" },
+      { "name": "C1", "signals": [], "description": "Cathode 1" },
+      { "name": "C2", "signals": [], "description": "Cathode 2" },
+      { "name": "C3", "signals": [], "description": "Cathode 3" },
+      { "name": "C4", "signals": [], "description": "Cathode 4" },
+      { "name": "C5", "signals": [], "description": "Cathode 5" },
+      { "name": "C6", "signals": [], "description": "Cathode 6" },
+      { "name": "C7", "signals": [], "description": "Cathode 7" },
+      { "name": "C8", "signals": [], "description": "Cathode 8" },
+      { "name": "C9", "signals": [], "description": "Cathode 9" },
+      { "name": "C10", "signals": [], "description": "Cathode 10" }
+    ],
+    "category": "actuator"
+  },
+  "NTC_TEMPERATURE_SENSOR": {
+    "wokwiType": "wokwi-ntc-temperature-sensor",
+    "attrs": {},
+    "pins": [
+      { "name": "GND", "signals": [{ "type": "power", "role": "GND" }] },
+      { "name": "VCC", "signals": [{ "type": "power", "role": "VCC" }] },
+      { "name": "OUT", "signals": [{ "type": "analog", "role": "OUT" }] }
+    ],
+    "category": "input"
+  },
+  "PUSHBUTTON_6MM": {
+    "wokwiType": "wokwi-pushbutton-6mm",
+    "attrs": {
+      "color": { "type": "string", "default": "red" },
+      "pressed": { "type": "boolean", "default": false },
+      "label": { "type": "string", "default": "" },
+      "xray": { "type": "boolean", "default": false }
+    },
+    "pins": [
+      { "name": "1.l", "signals": [] },
+      { "name": "2.l", "signals": [] },
+      { "name": "1.r", "signals": [] },
+      { "name": "2.r", "signals": [] }
+    ],
+    "category": "input"
+  },
+  "PUSHBUTTON": {
+    "wokwiType": "wokwi-pushbutton",
+    "attrs": {
+      "color": { "type": "string", "default": "red" },
+      "pressed": { "type": "boolean", "default": false },
+      "label": { "type": "string", "default": "" },
+      "xray": { "type": "boolean", "default": false }
+    },
+    "pins": [
+      { "name": "1.l", "signals": [] },
+      { "name": "2.l", "signals": [] },
+      { "name": "1.r", "signals": [] },
+      { "name": "2.r", "signals": [] }
+    ],
+    "category": "input"
+  },
+  "SEVEN_SEGMENT_1": {
+    "wokwiType": "wokwi-7segment",
+    "attrs": {
+      "common": { "type": "string", "default": "anode" },
+      "digits": { "type": "string", "default": "1" },
+      "colon": { "type": "string", "default": "" },
+      "color": { "type": "string", "default": "red" }
+    },
+    "pins": [
+      { "name": "COM.1", "signals": [] },
+      { "name": "COM.2", "signals": [] },
+      { "name": "A", "signals": [] },
+      { "name": "B", "signals": [] },
+      { "name": "C", "signals": [] },
+      { "name": "D", "signals": [] },
+      { "name": "E", "signals": [] },
+      { "name": "F", "signals": [] },
+      { "name": "G", "signals": [] },
+      { "name": "DP", "signals": [] }
+    ],
+    "category": "display"
+  },
+  "SEVEN_SEGMENT_2": {
+    "wokwiType": "wokwi-7segment",
+    "attrs": {
+      "common": { "type": "string", "default": "anode" },
+      "digits": { "type": "string", "default": "2" },
+      "colon": { "type": "string", "default": "" },
+      "color": { "type": "string", "default": "red" }
+    },
+    "pins": [
+      { "name": "DIG1", "signals": [] },
+      { "name": "DIG2", "signals": [] },
+      { "name": "A", "signals": [] },
+      { "name": "B", "signals": [] },
+      { "name": "C", "signals": [] },
+      { "name": "D", "signals": [] },
+      { "name": "E", "signals": [] },
+      { "name": "F", "signals": [] },
+      { "name": "G", "signals": [] },
+      { "name": "DP", "signals": [] }
+    ],
+    "category": "display"
+  },
+  "SEVEN_SEGMENT_3": {
+    "wokwiType": "wokwi-7segment",
+    "attrs": {
+      "common": { "type": "string", "default": "anode" },
+      "digits": { "type": "string", "default": "3" },
+      "colon": { "type": "string", "default": "" },
+      "color": { "type": "string", "default": "red" }
+    },
+    "pins": [
+      { "name": "DIG1", "signals": [] },
+      { "name": "DIG2", "signals": [] },
+      { "name": "DIG3", "signals": [] },
+      { "name": "A", "signals": [] },
+      { "name": "B", "signals": [] },
+      { "name": "C", "signals": [] },
+      { "name": "D", "signals": [] },
+      { "name": "E", "signals": [] },
+      { "name": "F", "signals": [] },
+      { "name": "G", "signals": [] },
+      { "name": "DP", "signals": [] }
+    ],
+    "category": "display"
+  },
+  "SEVEN_SEGMENT_4": {
+    "wokwiType": "wokwi-7segment",
+    "attrs": {
+      "common": { "type": "string", "default": "anode" },
+      "digits": { "type": "string", "default": "4" },
+      "colon": { "type": "string", "default": "" },
+      "color": { "type": "string", "default": "red" }
+    },
+    "pins": [
+      { "name": "A", "signals": [] },
+      { "name": "B", "signals": [] },
+      { "name": "C", "signals": [] },
+      { "name": "D", "signals": [] },
+      { "name": "E", "signals": [] },
+      { "name": "F", "signals": [] },
+      { "name": "G", "signals": [] },
+      { "name": "DP", "signals": [] },
+      { "name": "DIG1", "signals": [] },
+      { "name": "DIG2", "signals": [] },
+      { "name": "DIG3", "signals": [] },
+      { "name": "DIG4", "signals": [] },
+      { "name": "COM", "signals": [] },
+      { "name": "CLN", "signals": [] }
+    ],
+    "category": "display"
+  },
+  "RESISTOR": {
+    "wokwiType": "wokwi-resistor",
+    "attrs": {
+      "value": { "type": "string", "default": "1000" }
+    },
+    "pins": [
+      { "name": "1", "signals": [] },
+      { "name": "2", "signals": [] }
+    ],
+    "category": "passive"
+  },
+  "RGB_LED": {
+    "wokwiType": "wokwi-rgb-led",
+    "attrs": {
+      "ledRed": { "type": "number", "default": 0 },
+      "ledGreen": { "type": "number", "default": 0 },
+      "ledBlue": { "type": "number", "default": 0 }
+    },
+    "pins": [
+      { "name": "R", "signals": [] },
+      { "name": "COM", "signals": [] },
+      { "name": "G", "signals": [] },
+      { "name": "B", "signals": [] }
+    ],
+    "category": "actuator"
+  },
+  "SERVO": {
+    "wokwiType": "wokwi-servo",
+    "attrs": {
+      "horn": { "type": "string", "default": "single" },
+      "hornColor": { "type": "string", "default": "#ccc" }
+    },
+    "pins": [
+      { "name": "GND", "signals": [{ "type": "power", "role": "GND" }] },
+      { "name": "V+", "signals": [{ "type": "power", "role": "VCC" }] },
+      { "name": "PWM", "signals": [{ "type": "pwm" }] }
+    ],
+    "category": "actuator"
+  },
+  "POTENTIOMETER": {
+    "wokwiType": "wokwi-potentiometer",
+    "attrs": {
+      "min": { "type": "number", "default": 0 },
+      "max": { "type": "number", "default": 1023 },
+      "value": { "type": "number", "default": 0 },
+      "step": { "type": "number", "default": 1 },
+      "startDegree": { "type": "number", "default": -135 },
+      "endDegree": { "type": "number", "default": 135 }
+    },
+    "pins": [
+      { "name": "GND", "signals": [{ "type": "power", "role": "GND" }] },
+      { "name": "SIG", "signals": [{ "type": "analog", "role": "SIG" }] },
+      { "name": "VCC", "signals": [{ "type": "power", "role": "VCC" }] }
+    ],
+    "category": "input"
   }
 }
-

@@ -349,9 +349,98 @@ export const synthesizeWithElevenLabs = async ({
   };
 };
 
+const readResponseAudioBuffer = async (response) => {
+  if (!response?.body || typeof response.body.getReader !== "function") {
+    const arrayBuffer = await response.arrayBuffer();
+    return Buffer.from(arrayBuffer);
+  }
+
+  const reader = response.body.getReader();
+  const chunks = [];
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    if (value && value.length > 0) {
+      chunks.push(Buffer.from(value));
+    }
+  }
+
+  return Buffer.concat(chunks);
+};
+
+export const synthesizeWithMurf = async ({
+  text,
+  voiceId = "",
+  locale = "en-US",
+  model = "FALCON",
+  format = "MP3",
+  sampleRate = 24000,
+  channelType = "MONO"
+}) => {
+  const trimmedText = String(text || "").trim();
+  if (!trimmedText) {
+    throw new VoiceProviderError("Text is required for TTS", {
+      code: "missing_text",
+      statusCode: 400,
+      provider: "murf"
+    });
+  }
+
+  const apiKey = assertEnv("MURF_API_KEY");
+  const resolvedVoiceId = String(voiceId || process.env.MURF_VOICE_ID || "Matthew").trim();
+  const resolvedLocale = String(locale || process.env.MURF_LOCALE || "en-US").trim();
+  const resolvedModel = String(model || process.env.MURF_MODEL || "FALCON").trim();
+  const resolvedFormat = String(format || process.env.MURF_FORMAT || "MP3").trim().toUpperCase();
+  const resolvedChannelType = String(channelType || process.env.MURF_CHANNEL_TYPE || "MONO").trim().toUpperCase();
+  const resolvedSampleRate = Number(sampleRate || process.env.MURF_SAMPLE_RATE || 24000);
+
+  const response = await fetch("https://global.api.murf.ai/v1/speech/stream", {
+    method: "POST",
+    headers: {
+      "api-key": apiKey,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+      voice_id: resolvedVoiceId,
+      text: trimmedText,
+      locale: resolvedLocale,
+      model: resolvedModel,
+      format: resolvedFormat,
+      sampleRate: Number.isFinite(resolvedSampleRate) ? resolvedSampleRate : 24000,
+      channelType: resolvedChannelType
+    })
+  });
+
+  if (!response.ok) {
+    const errorText = String(await response.text()).slice(0, 300);
+    throw new VoiceProviderError(`Murf TTS failed (${response.status})`, {
+      code: "murf_tts_failed",
+      statusCode: 502,
+      provider: "murf",
+      details: errorText || "Unknown Murf error"
+    });
+  }
+
+  const audioBuffer = await readResponseAudioBuffer(response);
+  if (!audioBuffer || audioBuffer.length === 0) {
+    throw new VoiceProviderError("Murf returned empty audio", {
+      code: "murf_empty_audio",
+      statusCode: 502,
+      provider: "murf"
+    });
+  }
+
+  return {
+    audioBase64: audioBuffer.toString("base64"),
+    contentType: response.headers.get("content-type") || "audio/mpeg"
+  };
+};
+
 export const getVoiceRuntimeHealth = () => {
   return {
     deepgramConfigured: Boolean(process.env.DEEPGRAM_API_KEY?.trim()),
+    murfConfigured: Boolean(process.env.MURF_API_KEY?.trim()),
     elevenLabsConfigured: Boolean(process.env.ELEVENLABS_API_KEY?.trim()),
     elevenLabsVoiceConfigured: Boolean(
       process.env.ELEVENLABS_VOICE_ID?.trim() || process.env.ELEVENLABS_DEFAULT_VOICE_ID?.trim()

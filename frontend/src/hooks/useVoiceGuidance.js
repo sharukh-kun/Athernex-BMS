@@ -1,9 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { axiosInstance } from "../lib/axios.js";
 
-const MAX_CHUNK_BYTES = 8 * 1024 * 1024;
+const MAX_CHUNK_BYTES = 5 * 1024 * 1024;
+const MAX_STT_SESSION_BYTES = 4 * 1024 * 1024;
+const STT_RECORDER_ROTATE_MS = 2200;
 const DEFAULT_AUTO_SEND_DELAY_MS = 3000;
 const HOLD_ONE_DELAY_MS = 10000;
+const MIC_AUTO_STOP_SILENCE_MS = 7000;
 const HOLD_ONE_PATTERN = /\bhold one\b/i;
 
 const hasMediaRecorder = () => {
@@ -77,20 +80,6 @@ const extractErrorDetails = (event) => {
   };
 };
 
-const uniqueChunks = (list) => {
-  const seen = new Set();
-  const output = [];
-
-  for (const item of list) {
-    if (!item) continue;
-    if (seen.has(item)) continue;
-    seen.add(item);
-    output.push(item);
-  }
-
-  return output;
-};
-
 const normalizeSpeechText = (value = "") => {
   return String(value || "")
     .replace(/\s+/g, " ")
@@ -157,11 +146,14 @@ export default function useVoiceGuidance({
   const mediaRecorderRef = useRef(null);
   const mediaStreamRef = useRef(null);
   const chunksRef = useRef([]);
+  const sessionBytesRef = useRef(0);
+  const recorderRotateRequestedRef = useRef(false);
   const chunkTranscribeLockRef = useRef(false);
   const lastCaptionTranscribeAtRef = useRef(0);
   const autoSendTimerRef = useRef(null);
+  const autoStopTimerRef = useRef(null);
   const latestInterimRef = useRef("");
-  const shouldListenRef = useRef({ active: false, restartTimer: null });
+  const shouldListenRef = useRef({ active: false, restartTimer: null, rotateTimer: null });
   const ttsRef = useRef({ audio: null, url: "" });
   const ttsTokenRef = useRef(0);
   const onFinalTranscriptRef = useRef(onFinalTranscript);
@@ -186,11 +178,27 @@ export default function useVoiceGuidance({
     }
   }, []);
 
+  const clearRotateTimer = useCallback(() => {
+    const timerId = shouldListenRef.current.rotateTimer;
+    if (timerId) {
+      window.clearTimeout(timerId);
+      shouldListenRef.current.rotateTimer = null;
+    }
+  }, []);
+
   const clearAutoSendTimer = useCallback(() => {
     const timerId = autoSendTimerRef.current;
     if (timerId) {
       window.clearTimeout(timerId);
       autoSendTimerRef.current = null;
+    }
+  }, []);
+
+  const clearAutoStopTimer = useCallback(() => {
+    const timerId = autoStopTimerRef.current;
+    if (timerId) {
+      window.clearTimeout(timerId);
+      autoStopTimerRef.current = null;
     }
   }, []);
 
@@ -214,6 +222,7 @@ export default function useVoiceGuidance({
 
   const scheduleAutoSendFromSilence = useCallback((currentTranscript) => {
     clearAutoSendTimer();
+    clearAutoStopTimer();
 
     const delayMs = HOLD_ONE_PATTERN.test(String(currentTranscript || ""))
       ? HOLD_ONE_DELAY_MS
@@ -221,8 +230,28 @@ export default function useVoiceGuidance({
 
     autoSendTimerRef.current = window.setTimeout(() => {
       finalizeBufferedTranscript();
+
     }, delayMs);
-  }, [clearAutoSendTimer, finalizeBufferedTranscript]);
+
+    // Stop mic much later than transcript finalize so natural pauses
+    // don't cut the sentence while user is still speaking.
+    const stopDelayMs = HOLD_ONE_PATTERN.test(String(currentTranscript || ""))
+      ? HOLD_ONE_DELAY_MS + 4000
+      : MIC_AUTO_STOP_SILENCE_MS;
+
+    autoStopTimerRef.current = window.setTimeout(() => {
+      if (enabledRef.current && !handsFreeRef.current) {
+        const recorder = mediaRecorderRef.current;
+        if (recorder && recorder.state !== "inactive") {
+          try {
+            recorder.stop();
+          } catch {
+            // Ignore stop errors during silence auto-stop.
+          }
+        }
+      }
+    }, stopDelayMs);
+  }, [clearAutoSendTimer, clearAutoStopTimer, finalizeBufferedTranscript]);
 
   useEffect(() => {
     enabledRef.current = enabled;
@@ -283,32 +312,20 @@ export default function useVoiceGuidance({
     mediaStreamRef.current = null;
   }, []);
 
-  const transcribeChunkForCaption = useCallback(async (chunk) => {
-    if (!chunk || chunk.size === 0) return;
+  const transcribeBlobForCaption = useCallback(async (payloadBlob, recorderMime = "audio/webm") => {
+    if (!payloadBlob || payloadBlob.size === 0) return;
     if (chunkTranscribeLockRef.current) return;
 
     const now = Date.now();
     if (now - lastCaptionTranscribeAtRef.current < 1200) return;
 
-    const allChunks = chunksRef.current;
-    if (allChunks.length === 0) return;
-
-    const recorderMime = mediaRecorderRef.current?.mimeType || chunk.type || "audio/webm";
-
-    // Use a complete accumulated recording window so container metadata remains valid.
-    const stitchedBlob = new Blob(uniqueChunks(allChunks), {
-      type: recorderMime
-    });
-
-    if (!stitchedBlob || stitchedBlob.size === 0) return;
-
-    if (stitchedBlob.size > MAX_CHUNK_BYTES) {
+    if (payloadBlob.size > MAX_CHUNK_BYTES) {
       patchDiagnostics((prev) => ({
         ...prev,
         sttFailures: prev.sttFailures + 1,
-        lastChunkBytes: stitchedBlob.size,
+        lastChunkBytes: payloadBlob.size,
         lastSttStatus: 413,
-        lastError: `Skipped oversized chunk (${Math.round(stitchedBlob.size / 1024)} KB)`
+        lastError: `Skipped oversized chunk (${Math.round(payloadBlob.size / 1024)} KB)`
       }));
 
       const now = Date.now();
@@ -328,11 +345,11 @@ export default function useVoiceGuidance({
     patchDiagnostics((prev) => ({
       ...prev,
       sttAttempts: prev.sttAttempts + 1,
-      lastChunkBytes: stitchedBlob.size
+      lastChunkBytes: payloadBlob.size
     }));
 
     try {
-      const audioBase64 = await blobToBase64(stitchedBlob);
+      const audioBase64 = await blobToBase64(payloadBlob);
       const res = await axiosInstance.post("/voice/stt", {
         audioBase64,
         mimeType: recorderMime,
@@ -379,7 +396,9 @@ export default function useVoiceGuidance({
 
   const internalStopListening = useCallback((permanent = true) => {
     clearRestartTimer();
+    clearRotateTimer();
     clearAutoSendTimer();
+    clearAutoStopTimer();
 
     if (permanent) {
       shouldListenRef.current.active = false;
@@ -397,7 +416,7 @@ export default function useVoiceGuidance({
 
     releaseStream();
     setIsListening(false);
-  }, [clearAutoSendTimer, clearRestartTimer, releaseStream]);
+  }, [clearAutoSendTimer, clearAutoStopTimer, clearRestartTimer, clearRotateTimer, releaseStream]);
 
   const startListening = useCallback(async () => {
     if (!enabledRef.current || !isRecognitionSupported) return;
@@ -410,6 +429,8 @@ export default function useVoiceGuidance({
     clearRestartTimer();
     shouldListenRef.current.active = true;
     chunksRef.current = [];
+    sessionBytesRef.current = 0;
+    recorderRotateRequestedRef.current = false;
     lastCaptionTranscribeAtRef.current = 0;
     latestInterimRef.current = "";
 
@@ -427,12 +448,27 @@ export default function useVoiceGuidance({
       recorder.onstart = () => {
         setIsListening(true);
         onInterimTranscriptRef.current?.("Listening...");
+        // Only rotate continuously in hands-free mode.
+        if (handsFreeRef.current) {
+          clearRotateTimer();
+          shouldListenRef.current.rotateTimer = window.setTimeout(() => {
+            internalStopListening(false);
+          }, STT_RECORDER_ROTATE_MS);
+        }
       };
 
       recorder.ondataavailable = (event) => {
         if (!event.data || event.data.size === 0) return;
         chunksRef.current.push(event.data);
-        transcribeChunkForCaption(event.data);
+        sessionBytesRef.current += event.data.size;
+
+        if (
+          sessionBytesRef.current > MAX_STT_SESSION_BYTES &&
+          !recorderRotateRequestedRef.current
+        ) {
+          recorderRotateRequestedRef.current = true;
+          internalStopListening(false);
+        }
       };
 
       recorder.onerror = (event) => {
@@ -444,16 +480,35 @@ export default function useVoiceGuidance({
       };
 
       recorder.onstop = async () => {
-        const shouldRestart = Boolean(enabledRef.current && handsFreeRef.current && shouldListenRef.current.active);
+        const forceRestart = recorderRotateRequestedRef.current;
+        const shouldRestart = Boolean(
+          enabledRef.current &&
+          shouldListenRef.current.active &&
+          (handsFreeRef.current || forceRestart)
+        );
 
         mediaRecorderRef.current = null;
         releaseStream();
         setIsListening(false);
+        clearRotateTimer();
 
-        clearAutoSendTimer();
-        finalizeBufferedTranscript();
+        const finalMime = recorder.mimeType || "audio/webm";
+        const finalBlob = chunksRef.current.length > 0
+          ? new Blob(chunksRef.current, { type: finalMime })
+          : null;
+
+        if (finalBlob && finalBlob.size > 0) {
+          await transcribeBlobForCaption(finalBlob, finalMime);
+        }
+
+        if (!forceRestart) {
+          clearAutoSendTimer();
+          finalizeBufferedTranscript();
+        }
 
         chunksRef.current = [];
+        sessionBytesRef.current = 0;
+        recorderRotateRequestedRef.current = false;
 
         if (shouldRestart) {
           clearRestartTimer();
@@ -478,7 +533,7 @@ export default function useVoiceGuidance({
         message: "Microphone access is blocked. Allow microphone permission and try again."
       });
     }
-  }, [clearAutoSendTimer, clearRestartTimer, finalizeBufferedTranscript, isRecognitionSupported, releaseStream, transcribeChunkForCaption]);
+  }, [clearAutoSendTimer, clearRestartTimer, clearRotateTimer, finalizeBufferedTranscript, internalStopListening, isRecognitionSupported, releaseStream, transcribeBlobForCaption]);
 
   const stopListening = useCallback(() => {
     internalStopListening(true);
@@ -502,8 +557,13 @@ export default function useVoiceGuidance({
     try {
       const res = await axiosInstance.post("/voice/tts", {
         text: nextText,
-        modelId: "eleven_multilingual_v2",
-        outputFormat: "mp3_44100_128",
+        provider: "murf",
+        voiceId: "Matthew",
+        locale: language || "en-US",
+        model: "FALCON",
+        format: "MP3",
+        sampleRate: 24000,
+        channelType: "MONO",
         language: normalizeLanguage(language),
         rate: Number.isFinite(rate) ? rate : 0.9
       });
@@ -584,11 +644,13 @@ export default function useVoiceGuidance({
     return () => {
       shouldListenRef.current.active = false;
       clearRestartTimer();
+      clearRotateTimer();
       clearAutoSendTimer();
+      clearAutoStopTimer();
       stopSpeaking();
       releaseStream();
     };
-  }, [clearAutoSendTimer, clearRestartTimer, releaseStream, stopSpeaking]);
+  }, [clearAutoSendTimer, clearAutoStopTimer, clearRestartTimer, clearRotateTimer, releaseStream, stopSpeaking]);
 
   const status = useMemo(() => {
     if (!isVoiceSupported) return "unavailable";

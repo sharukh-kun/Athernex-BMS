@@ -1,6 +1,6 @@
 name: Arduino Uno smoke scenario
 version: 1
-author: HardCode CI
+author: NovaAI CI
 steps:
   - wait-serial: "SMOKE_OK"
   - delay: 500ms

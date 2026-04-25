@@ -1,4 +1,4 @@
-@import url("https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;600&display=swap");
+@import url("https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;600&family=Playfair+Display:ital,wght@0,600;0,700;1,600;1,700&display=swap");
 @import "tailwindcss";
 
 :root {
@@ -133,4 +133,11 @@ a {
   background: rgba(129, 140, 248, 0.55);
   border: 3px solid transparent;
   background-clip: padding-box;
+}
+
+.hero-display {
+  font-family: "Playfair Display", Georgia, serif;
+  font-style: italic;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
 }

@@ -5,6 +5,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import { useThemeStore } from "../store/useThemeStore";
 import toast from "react-hot-toast";
 import ChatRichText from "./ChatRichText";
+import ComponentsChat from "./ComponentsChat";
 
 const extractAssistantOptions = (text = "") => {
   const source = String(text);
@@ -240,12 +241,14 @@ void loop() {
 `);
 };
 
-const buildPinsCsv = (boardSchema = BOARD_SCHEMAS.arduino) => toSafeFileText(`component,pin,board_pin
-sensor,VCC,${boardSchema.powerPin}
-sensor,GND,GND
-sensor,DATA,${boardSchema.signalPins.data}
-status_led,ANODE,${boardSchema.signalPins.led}
-status_led,CATHODE,GND
+const buildPinsCsv = (boardSchema = BOARD_SCHEMAS.arduino) => toSafeFileText(`component,pin,board_pin,direction,signal_type,voltage,explanation
+sensor,VCC,${boardSchema.powerPin},input,power,${boardSchema.powerPin},Supplies stable operating voltage to the sensor module
+sensor,GND,GND,input,reference,0V,Provides common electrical reference shared by all modules
+sensor,DATA,${boardSchema.signalPins.data},output,analog_or_digital,0-${boardSchema.powerPin},Carries measured sensor value into the MCU read pin
+status_led,ANODE,${boardSchema.signalPins.led},input,digital_output,0-${boardSchema.powerPin},MCU drives this pin HIGH or LOW for visual status indication
+status_led,CATHODE,GND,input,return_path,0V,Completes LED current path to ground
+resistor_220ohm,LEG1,${boardSchema.signalPins.led},passive,current_limit,n/a,Limits LED current to protect MCU pin and LED
+resistor_220ohm,LEG2,status_led:ANODE,passive,current_limit,n/a,In series with LED anode to avoid overcurrent
 `);
 
 const buildComponentsJson = (boardSchema = BOARD_SCHEMAS.arduino) => toSafeFileText(`{
@@ -262,13 +265,75 @@ const buildComponentsJson = (boardSchema = BOARD_SCHEMAS.arduino) => toSafeFileT
 const buildAssemblyMd = (messages = [], boardSchema = BOARD_SCHEMAS.arduino) => {
   const projectTitle = deriveProjectTitle(messages);
 
-  return toSafeFileText(`# ${projectTitle}
+  return toSafeFileText(`# ${projectTitle} - Detailed Assembly Guide
 
-1. Place ${boardSchema.label} and your sensor on the workspace.
-2. Connect sensor power pins to ${boardSchema.powerPin} and GND.
-3. Connect sensor data pin to ${boardSchema.signalPins.data}.
-4. Connect LED to ${boardSchema.signalPins.led} with a 220 ohm resistor.
-5. Upload main.ino and open Serial Monitor.
+## 1) Project intent
+This build reads a sensor value and gives feedback through serial output plus a status LED.
+Target board: ${boardSchema.label}
+
+## 2) Required hardware
+- 1 x ${boardSchema.label}
+- 1 x Sensor module (analog or digital output pin)
+- 1 x LED
+- 1 x 220 ohm resistor
+- Breadboard and jumper wires
+- USB cable for power and upload
+
+## 3) Pre-assembly checklist
+1. Disconnect USB power before wiring.
+2. Confirm sensor operating voltage is compatible with ${boardSchema.powerPin}.
+3. Keep one clear ground rail on the breadboard.
+4. Separate power wires from signal wires where possible.
+
+## 4) Pin map summary
+- Sensor VCC -> ${boardSchema.powerPin}
+- Sensor GND -> GND
+- Sensor DATA -> ${boardSchema.signalPins.data}
+- LED control -> ${boardSchema.signalPins.led} through 220 ohm resistor
+- LED return -> GND
+
+## 5) Physical assembly steps
+1. Place ${boardSchema.label} at the edge of the breadboard for easy pin access.
+2. Place the sensor module so VCC GND and DATA pins are clearly visible.
+3. Place the LED on the breadboard with long leg (anode) separated from short leg (cathode).
+4. Insert a 220 ohm resistor in series between ${boardSchema.signalPins.led} and the LED anode.
+5. Connect sensor VCC to ${boardSchema.powerPin}.
+6. Connect sensor GND to board GND.
+7. Connect sensor DATA to ${boardSchema.signalPins.data}.
+8. Connect LED cathode to GND.
+9. Re-check every connection against pins.csv before powering.
+
+## 6) Power and signal verification before upload
+1. With power off verify no wire is shifted by one row on breadboard.
+2. Confirm there is no direct short between ${boardSchema.powerPin} and GND.
+3. Confirm resistor is in series with LED and not bypassed.
+4. Confirm sensor DATA is not tied directly to power.
+
+## 7) Firmware upload procedure
+1. Connect board by USB.
+2. Select correct board profile in compiler.
+3. Select correct COM port.
+4. Click Verify and confirm successful compile.
+5. Click Upload and wait for completion message.
+
+## 8) Runtime validation
+1. Open Serial Monitor at 9600 baud.
+2. Observe repeating sensor values.
+3. Change input condition on sensor and confirm values respond.
+4. Verify LED threshold behavior: ON above threshold and OFF below threshold.
+
+## 9) Troubleshooting
+- No serial data: check baud rate, COM port, and USB cable.
+- Constant zero/constant max reading: verify sensor DATA pin mapping and sensor voltage.
+- LED always off: verify resistor path and LED polarity.
+- LED always on: verify threshold logic and pin assignment in code.
+- Intermittent output: improve ground connection and shorten loose jumper wires.
+
+## 10) Safety and reliability notes
+- Never exceed board pin voltage limits.
+- Do not power high-current loads directly from MCU IO pins.
+- Keep a single common ground for all low-voltage modules.
+- Document any pin changes in both pins.csv and sketch constants.
 `);
 };
 
@@ -1098,7 +1163,6 @@ export default function ProjectChat({ onIdeationStateChange }) {
   const [lastOutputAt, setLastOutputAt] = useState("");
   const [serialConnected, setSerialConnected] = useState(false);
   const [serialBaudRate, setSerialBaudRate] = useState("9600");
-  const [showProjectSidebar, setShowProjectSidebar] = useState(true);
   const [workspaceFiles, setWorkspaceFiles] = useState(null);
   const scrollRef = useRef(null);
   const outputRequestInFlightRef = useRef(false);
@@ -1368,11 +1432,6 @@ export default function ProjectChat({ onIdeationStateChange }) {
 
   const handleTabSelect = (tabId) => {
     setActiveTab(tabId);
-    if (tabId === "compiler") {
-      setShowProjectSidebar(false);
-    } else {
-      setShowProjectSidebar(true);
-    }
   };
 
   useEffect(() => {
@@ -1422,6 +1481,7 @@ export default function ProjectChat({ onIdeationStateChange }) {
   };
 
   const activeFile = filesByTab[activeTab] || filesByTab.code;
+  const isComponentsView = activeTab === "components";
 
   // auto scroll
   useEffect(() => {
@@ -1493,6 +1553,36 @@ export default function ProjectChat({ onIdeationStateChange }) {
     };
   }, []);
 
+  const handleComponentsWorkspaceSync = (nextWorkspace = {}) => {
+    setWorkspaceFiles(normalizeWorkspaceFiles(nextWorkspace || {}));
+  };
+
+  const handleComponentsProjectSync = (patch = {}) => {
+    if (!patch || typeof patch !== "object") return;
+
+    setProject((current) => {
+      const base = current || {};
+      return {
+        ...base,
+        ...(patch.componentsState ? { componentsState: patch.componentsState } : {}),
+        ...(patch.architectureState ? { architectureState: patch.architectureState } : {}),
+        ...(patch.generationProfile ? { generationProfile: patch.generationProfile } : {})
+      };
+    });
+  };
+
+  const handleComponentsChatAppend = (entries = []) => {
+    const normalized = (Array.isArray(entries) ? entries : [])
+      .map((item) => ({
+        role: item?.role === "user" ? "user" : "ai",
+        content: String(item?.content || "").trim()
+      }))
+      .filter((item) => item.content);
+
+    if (normalized.length === 0) return;
+    setMessages((prev) => [...prev, ...normalized]);
+  };
+
   const sendMessage = async (messageOverride) => {
     const nextMessage = (messageOverride ?? input).trim();
     if (!nextMessage || loading) return;
@@ -1504,6 +1594,41 @@ export default function ProjectChat({ onIdeationStateChange }) {
     setLoading(true);
 
     try {
+      if (activeTab === "components") {
+        const componentsRes = await axios.post(
+          "http://localhost:5000/api/components/chat",
+          {
+            projectId: id,
+            message: userMsg
+          },
+          { withCredentials: true }
+        );
+
+        setMessages(prev => [
+          ...prev,
+          { role: "ai", content: componentsRes.data?.reply || "Components updated." }
+        ]);
+
+        if (componentsRes.data?.componentsState) {
+          setProject((current) => ({
+            ...(current || {}),
+            componentsState: componentsRes.data.componentsState
+          }));
+        }
+        if (componentsRes.data?.architectureState || componentsRes.data?.generationProfile) {
+          setProject((current) => ({
+            ...(current || {}),
+            ...(componentsRes.data?.architectureState ? { architectureState: componentsRes.data.architectureState } : {}),
+            ...(componentsRes.data?.generationProfile ? { generationProfile: componentsRes.data.generationProfile } : {})
+          }));
+        }
+        if (componentsRes.data?.workspaceFiles) {
+          setWorkspaceFiles(normalizeWorkspaceFiles(componentsRes.data.workspaceFiles));
+        }
+
+        return;
+      }
+
       const res = await axios.post(
         "http://localhost:5000/api/project-ai/chat",
         {
@@ -1576,10 +1701,6 @@ export default function ProjectChat({ onIdeationStateChange }) {
     }
   };
 
-  const handleSendFeedback = () => {
-    window.location.href = "mailto:feedback@hardcore.app?subject=Project%20Workspace%20Feedback";
-  };
-
   const runArduinoCompiler = async () => {
     if (!project?._id) {
       toast.error("Project is not ready yet");
@@ -1623,8 +1744,8 @@ export default function ProjectChat({ onIdeationStateChange }) {
 
   return (
     <div className={`${isDark ? "bg-[#212121] text-[#e5e5e5]" : "bg-[#f4f6fb] text-[#111]"} h-[100svh] max-h-[100svh] min-h-0 w-full overflow-hidden`}>
-      <div className={`grid h-full min-h-0 grid-cols-1 gap-0 ${showProjectSidebar ? "lg:grid-cols-[340px_minmax(0,1fr)_260px]" : "lg:grid-cols-[340px_minmax(0,1fr)]"}`}>
-        <aside className={`flex h-full min-h-0 flex-col border-r ${isDark ? "border-white/10 bg-[#2a2a2a]" : "border-black/10 bg-white"}`}>
+      <div className={`grid h-full min-h-0 grid-cols-1 gap-0 ${activeTab === "components" ? "lg:grid-cols-1" : "lg:grid-cols-[340px_minmax(0,1fr)]"}`}>
+        <aside className={`${activeTab === "components" ? "hidden " : ""}flex h-full min-h-0 flex-col border-r ${isDark ? "border-white/10 bg-[#2a2a2a]" : "border-black/10 bg-white"}`}>
           <div className="flex items-center justify-between px-5 py-4">
             <div>
               <p className="text-lg font-extrabold tracking-[0.08em]">Hardcore</p>
@@ -1714,60 +1835,56 @@ export default function ProjectChat({ onIdeationStateChange }) {
           </div>
         </aside>
 
-        <section className={`flex h-full min-h-0 flex-col ${showProjectSidebar ? "border-r" : ""} ${isDark ? "border-white/10 bg-[#252525]" : "border-black/10 bg-white"}`}>
-          <div className={`flex items-start justify-between border-b px-5 py-4 ${isDark ? "border-white/10" : "border-black/10"}`}>
-            <div>
-              <p className="text-xl font-semibold">Workspace</p>
-              <p className={`text-sm ${isDark ? "text-[#a1a1a1]" : "text-[#666]"}`}>Code, diagram, pins, components, assembly</p>
-            </div>
-            <div className="flex items-center gap-2">
-              <button
-                onClick={handleSetWokwiUrl}
-                className={`rounded-lg border px-3 py-1.5 text-xs font-semibold ${isDark ? "border-white/15 hover:bg-white/10" : "border-black/10 hover:bg-black/5"}`}
-              >
-                Set Wokwi URL
-              </button>
-              <button
-                onClick={handleOpenDesign}
-                className={`rounded-lg border px-3 py-1.5 text-xs font-semibold ${isDark ? "border-white/15 hover:bg-white/10" : "border-black/10 hover:bg-black/5"}`}
-              >
-                Open Design
-              </button>
-              {activeTab === "compiler" && !showProjectSidebar && (
-                <button
-                  onClick={() => setShowProjectSidebar(true)}
-                  className="rounded-lg bg-[#2563eb] px-3 py-1.5 text-xs font-semibold text-white hover:bg-[#1d4ed8]"
-                >
-                  Show project files
-                </button>
-              )}
-              <button
-                onClick={async () => {
-                  try {
-                    await navigator.clipboard.writeText(activeFile.content);
-                    toast.success(`${activeFile.name} copied`);
-                  } catch {
-                    toast.error("Copy failed");
-                  }
-                }}
-                className={`rounded-lg border px-3 py-1.5 text-xs font-semibold ${isDark ? "border-white/15 hover:bg-white/10" : "border-black/10 hover:bg-black/5"}`}
-              >
-                Copy
-              </button>
-              <button
-                onClick={() => downloadTextFile(activeFile.name, activeFile.content)}
-                className={`rounded-lg border px-3 py-1.5 text-xs font-semibold ${isDark ? "border-white/15 hover:bg-white/10" : "border-black/10 hover:bg-black/5"}`}
-              >
-                Download
-              </button>
-            </div>
-          </div>
+        <section className={`flex h-full min-h-0 flex-1 flex-col ${isDark ? "border-white/10 bg-[#252525]" : "border-black/10 bg-white"}`}>
+          {!isComponentsView && (
+            <>
+              <div className={`flex items-start justify-between border-b px-5 py-4 ${isDark ? "border-white/10" : "border-black/10"}`}>
+                <div>
+                  <p className="text-xl font-semibold">Workspace</p>
+                  <p className={`text-sm ${isDark ? "text-[#a1a1a1]" : "text-[#666]"}`}>Code, diagram, pins, components, assembly</p>
+                </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={handleSetWokwiUrl}
+                    className={`rounded-lg border px-3 py-1.5 text-xs font-semibold ${isDark ? "border-white/15 hover:bg-white/10" : "border-black/10 hover:bg-black/5"}`}
+                  >
+                    Set Wokwi URL
+                  </button>
+                  <button
+                    onClick={handleOpenDesign}
+                    className={`rounded-lg border px-3 py-1.5 text-xs font-semibold ${isDark ? "border-white/15 hover:bg-white/10" : "border-black/10 hover:bg-black/5"}`}
+                  >
+                    Open Design
+                  </button>
+                  <button
+                    onClick={async () => {
+                      try {
+                        await navigator.clipboard.writeText(activeFile.content);
+                        toast.success(`${activeFile.name} copied`);
+                      } catch {
+                        toast.error("Copy failed");
+                      }
+                    }}
+                    className={`rounded-lg border px-3 py-1.5 text-xs font-semibold ${isDark ? "border-white/15 hover:bg-white/10" : "border-black/10 hover:bg-black/5"}`}
+                  >
+                    Copy
+                  </button>
+                  <button
+                    onClick={() => downloadTextFile(activeFile.name, activeFile.content)}
+                    className={`rounded-lg border px-3 py-1.5 text-xs font-semibold ${isDark ? "border-white/15 hover:bg-white/10" : "border-black/10 hover:bg-black/5"}`}
+                  >
+                    Download
+                  </button>
+                </div>
+              </div>
 
-          <div className={`border-b px-5 py-2 ${isDark ? "border-white/10" : "border-black/10"}`}>
-            <p className={`text-xs ${isDark ? "text-[#9da3b3]" : "text-[#6b7280]"}`}>
-              Current file: {activeFile.name}
-            </p>
-          </div>
+              <div className={`border-b px-5 py-2 ${isDark ? "border-white/10" : "border-black/10"}`}>
+                <p className={`text-xs ${isDark ? "text-[#9da3b3]" : "text-[#6b7280]"}`}>
+                  Current file: {activeFile.name}
+                </p>
+              </div>
+            </>
+          )}
 
           <div className={`border-b px-5 py-3 ${isDark ? "border-white/10" : "border-black/10"}`}>
             <div className="flex flex-wrap items-center gap-2">
@@ -1791,7 +1908,7 @@ export default function ProjectChat({ onIdeationStateChange }) {
             </div>
           </div>
 
-          <div className="min-h-0 flex-1 px-5 py-4 overflow-hidden">
+          <div className={`min-h-0 flex-1 overflow-hidden ${isComponentsView ? "" : "px-5 py-4"}`}>
             {activeTab === "diagram" ? (
               <DiagramPreview isDark={isDark} diagram={diagram} />
             ) : activeTab === "compiler" ? (
@@ -1820,9 +1937,9 @@ export default function ProjectChat({ onIdeationStateChange }) {
                 </div>
 
                 {/* Main Content Grid - 3 Column Layout */}
-                <div className="flex min-h-0 flex-1 gap-4 overflow-hidden p-4">
+                <div className="workspace-scrollbar flex min-h-0 flex-1 gap-4 overflow-x-auto overflow-y-hidden p-4">
                   {/* Left Column: Sketch Preview */}
-                  <div className={`flex flex-col overflow-hidden rounded-xl border ${isDark ? "border-white/10 bg-[#2d2d38]" : "border-black/10 bg-white"}`}>
+                  <div className={`min-h-0 min-w-0 flex flex-1 flex-col overflow-hidden rounded-xl border ${isDark ? "border-white/10 bg-[#2d2d38]" : "border-black/10 bg-white"}`}>
                     <div className={`border-b px-4 py-3 ${isDark ? "border-white/10" : "border-black/10"}`}>
                       <p className="text-xs font-semibold uppercase tracking-wider text-slate-500">Sketch</p>
                       <p className="mt-1 font-semibold">main.ino</p>
@@ -1835,7 +1952,7 @@ export default function ProjectChat({ onIdeationStateChange }) {
                   </div>
 
                   {/* Middle Column: Port + Buttons */}
-                  <div className="workspace-scrollbar flex w-64 flex-col gap-3 overflow-y-auto">
+                  <div className="workspace-scrollbar flex min-h-0 w-64 shrink-0 flex-col gap-3 overflow-y-auto">
                     {/* Port Selection */}
                     <div className={`flex flex-col rounded-xl border p-4 ${isDark ? "border-white/10 bg-[#2d2d38]" : "border-black/10 bg-white"}`}>
                       <p className="mb-3 text-xs font-semibold uppercase tracking-wider text-slate-500">Port</p>
@@ -1897,7 +2014,7 @@ export default function ProjectChat({ onIdeationStateChange }) {
                   </div>
 
                   {/* Right Column: Logs & Output */}
-                  <div className="workspace-scrollbar flex flex-1 flex-col gap-3 overflow-y-auto pr-1">
+                  <div className="workspace-scrollbar min-h-0 min-w-0 flex flex-1 flex-col gap-3 overflow-y-auto pr-1">
                     {/* Hex Output */}
                     <div className={`flex min-h-[180px] shrink-0 flex-col overflow-hidden rounded-xl border ${isDark ? "border-white/10 bg-[#2d2d38]" : "border-black/10 bg-white"}`}>
                       <div className={`border-b px-4 py-2 ${isDark ? "border-white/10" : "border-black/10"}`}>
@@ -1973,7 +2090,15 @@ export default function ProjectChat({ onIdeationStateChange }) {
                   </div>
                 </div>
               </div>
-            ) : activeTab === "code" || activeTab === "pins" || activeTab === "components" || activeTab === "assembly" ? (
+            ) : activeTab === "components" ? (
+              <div className="h-full overflow-hidden">
+                <ComponentsChat
+                  onWorkspaceSync={handleComponentsWorkspaceSync}
+                  onProjectSync={handleComponentsProjectSync}
+                  onMainChatAppend={handleComponentsChatAppend}
+                />
+              </div>
+            ) : activeTab === "code" || activeTab === "pins" || activeTab === "assembly" ? (
               <div className={`workspace-scrollbar h-full overflow-y-auto ${isDark ? "bg-[#252525]" : "bg-[#f8fafc]"}`}>
                 <pre className={`h-full whitespace-pre-wrap break-words rounded-xl border p-4 text-xs leading-relaxed ${isDark ? "border-white/10 bg-[#1f1f1f] text-[#b8d97c]" : "border-black/10 bg-[#f8fafc] text-[#1f2937]"}`}>
                   {activeFile.content}
@@ -1989,68 +2114,6 @@ export default function ProjectChat({ onIdeationStateChange }) {
           </div>
         </section>
 
-          <aside className={`workspace-scrollbar h-full overflow-y-auto px-4 py-4 ${showProjectSidebar ? (isDark ? "bg-[#2a2a2a]" : "bg-[#fbfcff]") : "hidden"}`}>
-            <div className="flex items-center justify-between">
-            <div>
-              <p className="text-xl font-semibold">Project</p>
-              <p className={`text-sm ${isDark ? "text-[#a1a1a1]" : "text-[#666]"}`}>Files</p>
-            </div>
-            <button
-              onClick={handleSendFeedback}
-              className={`rounded-lg border px-3 py-1.5 text-xs font-semibold ${isDark ? "border-white/15 hover:bg-white/10" : "border-black/10 hover:bg-black/5"}`}
-            >
-              Send feedback
-            </button>
-          </div>
-
-          <div className="mt-5 space-y-5 text-sm">
-            <div>
-              <p className={`mb-2 text-xs font-semibold uppercase tracking-[0.14em] ${isDark ? "text-[#8f96aa]" : "text-[#6b7280]"}`}>src</p>
-              <button
-                onClick={() => setActiveTab("code")}
-                className={`w-full px-0 py-1 text-left font-semibold transition ${activeTab === "code" ? (isDark ? "text-white" : "text-black") : (isDark ? "text-[#c7c7c7] hover:text-white" : "text-[#374151] hover:text-black")}`}
-              >
-                main.ino
-              </button>
-            </div>
-
-            <div>
-              <p className={`mb-2 text-xs font-semibold uppercase tracking-[0.14em] ${isDark ? "text-[#8f96aa]" : "text-[#6b7280]"}`}>wiring</p>
-              <button
-                onClick={() => setActiveTab("diagram")}
-                className={`w-full px-0 py-1 text-left font-semibold transition ${activeTab === "diagram" ? (isDark ? "text-white" : "text-black") : (isDark ? "text-[#c7c7c7] hover:text-white" : "text-[#374151] hover:text-black")}`}
-              >
-                diagram
-              </button>
-            </div>
-
-            <div>
-              <p className={`mb-2 text-xs font-semibold uppercase tracking-[0.14em] ${isDark ? "text-[#8f96aa]" : "text-[#6b7280]"}`}>specs</p>
-              <button
-                onClick={() => setActiveTab("pins")}
-                className={`mb-1 w-full px-0 py-1 text-left font-semibold transition ${activeTab === "pins" ? (isDark ? "text-white" : "text-black") : (isDark ? "text-[#c7c7c7] hover:text-white" : "text-[#374151] hover:text-black")}`}
-              >
-                pins.csv
-              </button>
-              <button
-                onClick={() => setActiveTab("components")}
-                className={`w-full px-0 py-1 text-left font-semibold transition ${activeTab === "components" ? (isDark ? "text-white" : "text-black") : (isDark ? "text-[#c7c7c7] hover:text-white" : "text-[#374151] hover:text-black")}`}
-              >
-                components.json
-              </button>
-            </div>
-
-            <div>
-              <p className={`mb-2 text-xs font-semibold uppercase tracking-[0.14em] ${isDark ? "text-[#8f96aa]" : "text-[#6b7280]"}`}>docs</p>
-              <button
-                onClick={() => setActiveTab("assembly")}
-                className={`w-full px-0 py-1 text-left font-semibold transition ${activeTab === "assembly" ? (isDark ? "text-white" : "text-black") : (isDark ? "text-[#c7c7c7] hover:text-white" : "text-[#374151] hover:text-black")}`}
-              >
-                assembly.md
-              </button>
-            </div>
-          </div>
-        </aside>
       </div>
     </div>
   );
