@@ -4,9 +4,21 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import Project from "../models/project.model.js";
 
-const groq = new Groq({
-  apiKey: process.env.GROQ_API_KEY
-});
+let groqClient = null;
+
+const getGroqClient = () => {
+  if (groqClient) {
+    return groqClient;
+  }
+
+  const apiKey = process.env.GROQ_API_KEY?.trim();
+  if (!apiKey) {
+    throw new Error("Missing GROQ_API_KEY. Add it to backend/.env before using ProjectAI.");
+  }
+
+  groqClient = new Groq({ apiKey });
+  return groqClient;
+};
 
 const RELEVANT_EXTENSIONS = new Set([
   ".ino",
@@ -24,7 +36,6 @@ const RELEVANT_EXTENSIONS = new Set([
 const MAX_FILES = 24;
 const MAX_SNIPPET_CHARS = 3500;
 const MAX_HISTORY_MESSAGES = 10;
-
 const stripThinking = (value = "") => {
   return String(value)
     .replace(/<think>[\s\S]*?<\/think>/gi, "")
@@ -32,6 +43,62 @@ const stripThinking = (value = "") => {
 };
 
 const safeText = (value = "") => stripThinking(String(value || ""));
+
+const isEditIntent = (value = "") => {
+  const text = String(value || "").toLowerCase();
+  return /\b(edit|update|modify|change|rewrite|replace|refactor|fix|add|remove|implement|generate|write|create|patch)\b/.test(text)
+    || /\bmain\.ino|diagram\.json|pins\.csv|components\.json|assembly\.md|code|sketch|firmware\b/.test(text);
+};
+
+const normalizeWorkspaceFiles = (value = {}) => {
+  const source = value && typeof value === "object" ? value : {};
+  return {
+    "main.ino": safeText(source["main.ino"] || source.mainIno || ""),
+    "diagram.json": safeText(source["diagram.json"] || source.diagramJson || ""),
+    "pins.csv": safeText(source["pins.csv"] || source.pinsCsv || ""),
+    "components.json": safeText(source["components.json"] || source.componentsJson || ""),
+    "assembly.md": safeText(source["assembly.md"] || source.assemblyMd || "")
+  };
+};
+
+const projectWorkspaceFiles = (project) => normalizeWorkspaceFiles({
+  mainIno: project?.workspaceFiles?.mainIno,
+  diagramJson: project?.workspaceFiles?.diagramJson,
+  pinsCsv: project?.workspaceFiles?.pinsCsv,
+  componentsJson: project?.workspaceFiles?.componentsJson,
+  assemblyMd: project?.workspaceFiles?.assemblyMd
+});
+
+const persistWorkspaceFiles = (project, files = {}) => {
+  const normalized = normalizeWorkspaceFiles(files);
+  project.workspaceFiles = {
+    mainIno: normalized["main.ino"],
+    diagramJson: normalized["diagram.json"],
+    pinsCsv: normalized["pins.csv"],
+    componentsJson: normalized["components.json"],
+    assemblyMd: normalized["assembly.md"]
+  };
+};
+
+const safeParseJson = (text = "") => {
+  const cleaned = safeText(text);
+
+  try {
+    return JSON.parse(cleaned);
+  } catch {
+    const block = cleaned.match(/```json\s*([\s\S]*?)\s*```/i);
+    if (block?.[1]) {
+      return JSON.parse(block[1]);
+    }
+
+    const inline = cleaned.match(/\{[\s\S]*\}/);
+    if (inline?.[0]) {
+      return JSON.parse(inline[0]);
+    }
+  }
+
+  throw new Error("Failed to parse ProjectAI JSON");
+};
 
 const isRelevantFile = (filePath) => {
   const lowered = filePath.toLowerCase();
@@ -148,14 +215,14 @@ const buildHistoryText = (project) => {
     .join("\n");
 };
 
-const buildProjectAIPrompt = ({ project, userInput, context, historyText, mode }) => {
+const buildProjectAIPrompt = ({ project, userInput, context, historyText, mode, workspaceFiles, editIntent }) => {
   return `
 You are ProjectAI for the HardCode extension.
 
 Purpose:
 - Inspect the selected hardware repository and the project record.
 - Help the user reason about the .ino firmware, diagram.json wiring, config files, and any companion files.
-- Give direct implementation guidance without rewriting the whole product flow.
+- Give direct implementation guidance and edit workspace files when the user asks for code or file changes.
 - Reuse the current project context instead of inventing new structure.
 
 Rules:
@@ -163,11 +230,21 @@ Rules:
 - Mention exact file names when they matter.
 - If the repo path is missing, ask the user to select one.
 - If the context shows multiple possible entry files, call out the one you think is primary.
-- Do not return JSON. Return plain text only.
+- If the user asks to change code, fix code, add a feature, or edit files, update the relevant workspace file content.
+- Only edit files when the user intent implies a change.
+- Prefer editing main.ino unless another file is clearly requested.
+- If edit intent is false, all values in updates must be empty strings.
+- If edit intent is true, only changed files should be returned. Leave untouched files as empty strings.
+- Never put conversational explanation, project ideation text, or prose inside source files.
+- main.ino must contain Arduino sketch code only.
+- Return strict JSON only.
 - Do not mention internal chain-of-thought.
 
 Mode:
 ${mode}
+
+Edit intent:
+${editIntent ? "true" : "false"}
 
 Project description:
 ${project?.description || ""}
@@ -184,25 +261,59 @@ ${JSON.stringify(project?.designState || {})}
 Hardware context:
 ${JSON.stringify(context, null, 2)}
 
+Current workspace files:
+${JSON.stringify(workspaceFiles, null, 2)}
+
 Recent ProjectAI history:
 ${historyText}
 
 User input:
 ${userInput}
+
+OUTPUT STRICT JSON:
+{
+  "reply": "",
+  "updates": {
+    "main.ino": "",
+    "diagram.json": "",
+    "pins.csv": "",
+    "components.json": "",
+    "assembly.md": ""
+  }
+}
 `;
 };
 
-const callProjectAI = async ({ project, userInput, context, mode }) => {
+const callProjectAI = async ({ project, userInput, context, mode, workspaceFiles, editIntent }) => {
   const historyText = buildHistoryText(project);
-  const prompt = buildProjectAIPrompt({ project, userInput, context, historyText, mode });
+  const prompt = buildProjectAIPrompt({ project, userInput, context, historyText, mode, workspaceFiles, editIntent });
+  const groq = getGroqClient();
 
   const response = await groq.chat.completions.create({
-    model: process.env.GROQ_MODEL || "gpt-4o",
+    model: process.env.GROQ_MODEL || "llama-3.1-8b-instant",
     messages: [{ role: "user", content: prompt }],
-    temperature: 0.2
+    temperature: 0.2,
+    max_completion_tokens: 1200
   });
 
-  return safeText(response.choices?.[0]?.message?.content || "");
+  const rawText = response.choices?.[0]?.message?.content || "";
+  let parsed = null;
+
+  try {
+    parsed = safeParseJson(rawText);
+  } catch {
+    parsed = {
+      reply: safeText(rawText),
+      updates: {}
+    };
+  }
+
+  const updates = editIntent ? normalizeWorkspaceFiles(parsed?.updates || {}) : normalizeWorkspaceFiles({});
+
+  return {
+    reply: safeText(parsed?.reply || rawText || "ProjectAI updated the workspace context."),
+    updates
+  };
 };
 
 const ensureAccess = async (projectId, userId) => {
@@ -243,7 +354,8 @@ export const getProjectAiHistory = async (req, res) => {
 
     res.json({
       messages: access.project.projectAiMessages || [],
-      projectAiState: access.project.projectAiState || null
+      projectAiState: access.project.projectAiState || null,
+      workspaceFiles: projectWorkspaceFiles(access.project)
     });
   } catch (error) {
     res.status(500).json({ error: error.message || "Failed to load ProjectAI history" });
@@ -263,7 +375,8 @@ export const getProjectAiContext = async (req, res) => {
     res.json({
       projectId: id,
       context,
-      projectAiState: access.project.projectAiState || null
+      projectAiState: access.project.projectAiState || null,
+      workspaceFiles: projectWorkspaceFiles(access.project)
     });
   } catch (error) {
     res.status(500).json({ error: error.message || "Failed to load ProjectAI context" });
@@ -280,22 +393,31 @@ export const initProjectAi = async (req, res) => {
     }
 
     const context = await buildLocalHardwareContext(access.project.wokwiProjectPath || "");
-    const reply = await callProjectAI({
+    const workspaceFiles = projectWorkspaceFiles(access.project);
+    const result = await callProjectAI({
       project: access.project,
       userInput: "Initialize ProjectAI and summarize the available hardware project context.",
       context,
-      mode: "init"
+      mode: "init",
+      workspaceFiles,
+      editIntent: false
     });
 
     if (!access.project.projectAiMessages) {
       access.project.projectAiMessages = [];
     }
 
-    access.project.projectAiMessages.push({ role: "ai", content: reply });
-    persistProjectAIState(access.project, context, reply);
+    access.project.projectAiMessages.push({ role: "ai", content: result.reply });
+    persistWorkspaceFiles(access.project, { ...workspaceFiles, ...result.updates });
+    persistProjectAIState(access.project, context, result.reply);
     await access.project.save();
 
-    res.json({ reply, projectAiState: access.project.projectAiState, context });
+    res.json({
+      reply: result.reply,
+      projectAiState: access.project.projectAiState,
+      context,
+      workspaceFiles: projectWorkspaceFiles(access.project)
+    });
   } catch (error) {
     res.status(500).json({ error: error.message || "Failed to initialize ProjectAI" });
   }
@@ -303,7 +425,7 @@ export const initProjectAi = async (req, res) => {
 
 export const chatProjectAi = async (req, res) => {
   try {
-    const { projectId, message, projectPath = "" } = req.body;
+    const { projectId, message, projectPath = "", workspaceFiles = {} } = req.body;
     const access = await ensureAccess(projectId, req.user._id);
 
     if (access.error) {
@@ -325,25 +447,34 @@ export const chatProjectAi = async (req, res) => {
     });
 
     const context = await buildLocalHardwareContext(projectPath || project.wokwiProjectPath || "");
-    const reply = await callProjectAI({
+    const currentWorkspaceFiles = {
+      ...projectWorkspaceFiles(project),
+      ...normalizeWorkspaceFiles(workspaceFiles)
+    };
+    const editIntent = isEditIntent(String(message).trim());
+    const result = await callProjectAI({
       project,
       userInput: String(message).trim(),
       context,
-      mode: "chat"
+      mode: "chat",
+      workspaceFiles: currentWorkspaceFiles,
+      editIntent
     });
 
     project.projectAiMessages.push({
       role: "ai",
-      content: reply
+      content: result.reply
     });
 
-    persistProjectAIState(project, context, reply);
+    persistWorkspaceFiles(project, { ...currentWorkspaceFiles, ...result.updates });
+    persistProjectAIState(project, context, result.reply);
     await project.save();
 
     res.json({
-      reply,
+      reply: result.reply,
       projectAiState: project.projectAiState,
-      context
+      context,
+      workspaceFiles: projectWorkspaceFiles(project)
     });
   } catch (error) {
     res.status(500).json({ error: error.message || "Failed to chat with ProjectAI" });

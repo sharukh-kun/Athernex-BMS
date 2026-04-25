@@ -17,6 +17,28 @@ const getErrorMessage = (error, fallbackMessage) => {
   return error?.response?.data?.message || fallbackMessage;
 };
 
+const getFirebaseErrorMessage = (error, fallbackMessage) => {
+  const code = error?.code || "";
+
+  if (code === "auth/popup-closed-by-user") {
+    return "Google popup was closed before completing sign-in.";
+  }
+
+  if (code === "auth/popup-blocked") {
+    return "Browser blocked the Google login popup. Allow popups and try again.";
+  }
+
+  if (code === "auth/unauthorized-domain") {
+    return "This domain is not authorized in Firebase Auth settings.";
+  }
+
+  if (code === "auth/network-request-failed") {
+    return "Network issue during Google sign-in. Check your connection and retry.";
+  }
+
+  return error?.response?.data?.message || error?.message || fallbackMessage;
+};
+
 const debugAuth = (...args) => {
   if (import.meta.env.MODE !== "production") {
     console.debug("[auth-store]", ...args);
@@ -115,7 +137,7 @@ export const useAuthStore = create((set) => ({
       toast.success("Logged in with Google");
       debugAuth("google login success", { userId: user?._id });
     } catch (error) {
-      toast.error(getErrorMessage(error, "Google login failed"));
+      toast.error(getFirebaseErrorMessage(error, "Google login failed"));
       debugAuth("google login failed", error?.message);
     } finally {
       set({ isLoggingIn: false });

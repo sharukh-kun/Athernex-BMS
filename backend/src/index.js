@@ -12,6 +12,8 @@ import authRoutes from "./routes/auth.route.js";
 import componentsRoutes from "./routes/components.route.js";
 import designRoutes from "./routes/design.route.js";
 import wokwiRoutes from "./routes/wokwi.route.js";
+import compileRoutes from "./routes/compile.route.js";
+import projectAiRoutes from "./routes/project-ai.route.js";
 
 
 
@@ -28,6 +30,8 @@ app.use("/api", ideationRoutes);
 app.use("/api", projectRoutes);
 app.use("/api", componentsRoutes);
 app.use("/api", designRoutes);
+app.use("/api", projectAiRoutes);
+app.use("/api/compile", compileRoutes);
 app.use("/api", wokwiRoutes);
 app.use("/api/auth", authRoutes);
 

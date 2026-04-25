@@ -1,6 +1,34 @@
 import { generateToken } from "../lib/utils.js";
 import User from "../models/user.model.js";
 
+const verifyFirebaseIdToken = async (idToken) => {
+  const apiKey = process.env.FIREBASE_API_KEY;
+
+  if (!apiKey) {
+    throw new Error("FIREBASE_API_KEY is not configured on the server");
+  }
+
+  const response = await fetch(
+    `https://identitytoolkit.googleapis.com/v1/accounts:lookup?key=${apiKey}`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ idToken }),
+    }
+  );
+
+  const payload = await response.json();
+
+  if (!response.ok || !Array.isArray(payload?.users) || payload.users.length === 0) {
+    const reason = payload?.error?.message || "Token verification failed";
+    throw new Error(reason);
+  }
+
+  return payload.users[0];
+};
+
 const debugAuth = (...args) => {
   if (process.env.NODE_ENV !== "production") {
     console.debug("[auth]", ...args);
@@ -109,5 +137,66 @@ export const checkAuth = (req, res) => {
   } catch (error) {
     console.log("Error in checkAuth controller", error.message);
     res.status(500).json({ message: "Internal Server Error" });
+  }
+};
+
+export const firebaseAuth = async (req, res) => {
+  try {
+    const { idToken, fullName } = req.body || {};
+
+    if (!idToken) {
+      return res.status(400).json({ message: "Firebase idToken is required" });
+    }
+
+    const firebaseUser = await verifyFirebaseIdToken(idToken);
+    const firebaseUid = String(firebaseUser.localId || "").trim();
+    const normalizedEmail = String(firebaseUser.email || "").trim().toLowerCase();
+
+    if (!firebaseUid || !normalizedEmail) {
+      return res.status(400).json({ message: "Invalid Firebase user payload" });
+    }
+
+    const preferredName =
+      String(fullName || "").trim() ||
+      String(firebaseUser.displayName || "").trim() ||
+      normalizedEmail.split("@")[0];
+
+    const preferredPhoto = String(firebaseUser.photoUrl || "").trim();
+
+    let user = await User.findOne({ firebaseUid });
+
+    if (!user) {
+      // Backward-compatible path: users created before firebaseUid existed.
+      user = await User.findOne({ email: normalizedEmail });
+    }
+
+    if (!user) {
+      user = await User.create({
+        firebaseUid,
+        email: normalizedEmail,
+        fullName: preferredName,
+        profilePic: preferredPhoto,
+        password: "",
+      });
+    } else {
+      user.firebaseUid = user.firebaseUid || firebaseUid;
+      user.email = normalizedEmail;
+      if (preferredName) user.fullName = preferredName;
+      if (preferredPhoto) user.profilePic = preferredPhoto;
+      await user.save();
+    }
+
+    generateToken(user._id, res);
+    debugAuth("firebase auth success", { userId: user._id.toString(), email: user.email });
+
+    return res.status(200).json({
+      _id: user._id,
+      fullName: user.fullName,
+      email: user.email,
+      profilePic: user.profilePic,
+    });
+  } catch (error) {
+    console.log("Error in firebaseAuth controller", error.message);
+    return res.status(401).json({ message: "Google login failed. Please try again." });
   }
 };
