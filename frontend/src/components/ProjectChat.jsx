@@ -1827,7 +1827,7 @@ export default function ProjectChat({ onIdeationStateChange }) {
                       <p className="text-xs font-semibold uppercase tracking-wider text-slate-500">Sketch</p>
                       <p className="mt-1 font-semibold">main.ino</p>
                     </div>
-                    <div className="min-h-0 flex-1 overflow-auto">
+                    <div className="workspace-scrollbar min-h-0 flex-1 overflow-auto">
                       <pre className="h-full whitespace-pre-wrap break-words p-4 font-mono text-xs leading-5 text-slate-400">
 {codeText}
                       </pre>
@@ -1835,7 +1835,7 @@ export default function ProjectChat({ onIdeationStateChange }) {
                   </div>
 
                   {/* Middle Column: Port + Buttons */}
-                  <div className="flex w-64 flex-col gap-3 overflow-y-auto">
+                  <div className="workspace-scrollbar flex w-64 flex-col gap-3 overflow-y-auto">
                     {/* Port Selection */}
                     <div className={`flex flex-col rounded-xl border p-4 ${isDark ? "border-white/10 bg-[#2d2d38]" : "border-black/10 bg-white"}`}>
                       <p className="mb-3 text-xs font-semibold uppercase tracking-wider text-slate-500">Port</p>
@@ -1897,13 +1897,13 @@ export default function ProjectChat({ onIdeationStateChange }) {
                   </div>
 
                   {/* Right Column: Logs & Output */}
-                  <div className="flex flex-1 flex-col gap-3 overflow-y-auto pr-1">
+                  <div className="workspace-scrollbar flex flex-1 flex-col gap-3 overflow-y-auto pr-1">
                     {/* Hex Output */}
                     <div className={`flex min-h-[180px] shrink-0 flex-col overflow-hidden rounded-xl border ${isDark ? "border-white/10 bg-[#2d2d38]" : "border-black/10 bg-white"}`}>
                       <div className={`border-b px-4 py-2 ${isDark ? "border-white/10" : "border-black/10"}`}>
                         <p className="text-xs font-semibold uppercase tracking-wider text-slate-500">Hex Output</p>
                       </div>
-                      <div className="min-h-0 flex-1 overflow-auto">
+                      <div className="workspace-scrollbar min-h-0 flex-1 overflow-auto">
                         <pre className="whitespace-pre-wrap break-words p-3 font-mono text-xs leading-4 text-slate-400">
 {compilerOutput?.hexCode || "Ready after verify"}
                         </pre>
@@ -1915,7 +1915,7 @@ export default function ProjectChat({ onIdeationStateChange }) {
                       <div className={`border-b px-4 py-2 ${isDark ? "border-white/10" : "border-black/10"}`}>
                         <p className="text-xs font-semibold uppercase tracking-wider text-slate-500">Log</p>
                       </div>
-                      <div className="min-h-0 flex-1 overflow-auto">
+                      <div className="workspace-scrollbar min-h-0 flex-1 overflow-auto">
                         <pre className="whitespace-pre-wrap break-words p-3 font-mono text-xs leading-4 text-slate-400">
 {compilerOutput ? (compilerOutput.compileResult?.summary || "Check details above") : "Logs appear after verify"}
                         </pre>
@@ -1961,7 +1961,7 @@ export default function ProjectChat({ onIdeationStateChange }) {
                           </button>
                         </div>
                       </div>
-                      <div className="min-h-0 flex-1 overflow-auto">
+                      <div className="workspace-scrollbar min-h-0 flex-1 overflow-auto">
                         <pre className="whitespace-pre-wrap break-words p-3 font-mono text-xs leading-4 text-slate-400">
 {outputText || "No serial output yet. Connect Arduino and start Serial.print/println in your sketch."}
                         </pre>

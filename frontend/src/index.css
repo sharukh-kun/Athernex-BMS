@@ -110,7 +110,7 @@ a {
 
 .workspace-scrollbar {
   scrollbar-width: thin;
-  scrollbar-color: rgba(255, 255, 255, 0.18) transparent;
+  scrollbar-color: rgba(148, 163, 184, 0.45) transparent;
 }
 
 .workspace-scrollbar::-webkit-scrollbar {
@@ -123,14 +123,14 @@ a {
 }
 
 .workspace-scrollbar::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.18);
+  background: rgba(148, 163, 184, 0.45);
   border: 3px solid transparent;
   background-clip: padding-box;
   border-radius: 999px;
 }
 
 .workspace-scrollbar::-webkit-scrollbar-thumb:hover {
-  background: rgba(255, 255, 255, 0.28);
+  background: rgba(129, 140, 248, 0.55);
   border: 3px solid transparent;
   background-clip: padding-box;
 }
