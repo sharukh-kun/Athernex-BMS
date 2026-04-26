@@ -71,7 +71,6 @@ const normalizeWorkspaceFiles = (value = {}) => {
   const source = value && typeof value === "object" ? value : {};
   return {
     mainIno: toSafeFileText(source.mainIno || source["main.ino"] || ""),
-    diagramJson: toSafeFileText(source.diagramJson || source["diagram.json"] || ""),
     pinsCsv: toSafeFileText(source.pinsCsv || source["pins.csv"] || ""),
     componentsJson: toSafeFileText(source.componentsJson || source["components.json"] || ""),
     assemblyMd: toSafeFileText(source.assemblyMd || source["assembly.md"] || "")
@@ -198,11 +197,134 @@ const deriveSummary = (messages = []) => {
   return compact.length > 150 ? `${compact.slice(0, 147)}...` : compact;
 };
 
-const buildMainCode = (messages = [], boardSchema = BOARD_SCHEMAS.arduino) => {
+const buildProjectContextText = (messages = [], project = null) => {
+  return toSafeFileText([
+    project?.description,
+    project?.ideaState?.summary,
+    project?.ideaState?.requirements,
+    project?.componentsState?.components,
+    project?.componentsState?.architecture,
+    ...messages.map((message) => message?.content)
+  ].filter(Boolean).join(" ")).toLowerCase();
+};
+
+const normalizeCodePinLiteral = (pinValue = "") => String(pinValue || "")
+  .trim()
+  .replace(/^D(\d+)$/i, "$1")
+  .replace(/^GPIO(\d+)$/i, "$1");
+
+const buildMainCode = (messages = [], boardSchema = BOARD_SCHEMAS.arduino, project = null) => {
   const projectTitle = deriveProjectTitle(messages);
   const summary = deriveSummary(messages);
+  const projectText = buildProjectContextText(messages, project);
   const sensorPin = boardSchema.codeSensorPin;
   const ledPin = boardSchema.codeLedPin;
+  const trigPin = normalizeCodePinLiteral(boardSchema.signalPins?.trig || "9");
+  const echoPin = normalizeCodePinLiteral(boardSchema.signalPins?.echo || "10");
+  const hasDistanceKeyword = /\bdistance\b|\brange\b|\bcm\b|\bcentimeter\b|\bultrasonic\b|\bhc[-\s]?sr0?4\b/.test(projectText);
+  const hasIrSensorKeyword = /\bir\s*(sensor|distance)\b|\binfrared\s*(sensor|distance)\b/.test(projectText);
+  const isIrRemoteContext = /\bir\s*receiver\b|\bremote\b/.test(projectText);
+  const isDistanceIntent = hasDistanceKeyword || (hasIrSensorKeyword && !isIrRemoteContext);
+  const isUltrasonicIntent = /\bultrasonic\b|\bhc[-\s]?sr0?4\b|\btrig\b|\becho\b/.test(projectText);
+
+  if (isDistanceIntent && isUltrasonicIntent) {
+    return toSafeFileText(`// ${projectTitle}
+// ${summary}
+
+const int TRIG_PIN = ${trigPin};
+const int ECHO_PIN = ${echoPin};
+const int STATUS_LED = ${ledPin};
+
+unsigned long lastReadAt = 0;
+const unsigned long READ_INTERVAL = 250;
+
+float readDistanceCm() {
+  digitalWrite(TRIG_PIN, LOW);
+  delayMicroseconds(2);
+  digitalWrite(TRIG_PIN, HIGH);
+  delayMicroseconds(10);
+  digitalWrite(TRIG_PIN, LOW);
+
+  const unsigned long duration = pulseIn(ECHO_PIN, HIGH, 30000UL);
+  if (duration == 0) return -1.0f;
+  return (duration * 0.0343f) / 2.0f;
+}
+
+void setup() {
+  pinMode(TRIG_PIN, OUTPUT);
+  pinMode(ECHO_PIN, INPUT);
+  pinMode(STATUS_LED, OUTPUT);
+  Serial.begin(9600);
+}
+
+void loop() {
+  const unsigned long now = millis();
+  if (now - lastReadAt < READ_INTERVAL) return;
+  lastReadAt = now;
+
+  const float distanceCm = readDistanceCm();
+  if (distanceCm < 0.0f) {
+    Serial.println("Distance: out of range");
+    digitalWrite(STATUS_LED, LOW);
+    return;
+  }
+
+  Serial.print("Distance: ");
+  Serial.print(distanceCm, 1);
+  Serial.println(" cm");
+
+  digitalWrite(STATUS_LED, distanceCm <= 20.0f ? HIGH : LOW);
+}
+`);
+  }
+
+  if (isDistanceIntent) {
+    const adcMax = boardSchema.id === "esp32" ? 4095.0 : 1023.0;
+    const vRef = boardSchema.id === "esp32" ? 3.3 : 5.0;
+    return toSafeFileText(`// ${projectTitle}
+// ${summary}
+
+#include <math.h>
+
+const int IR_SENSOR_PIN = ${sensorPin};
+const int STATUS_LED = ${ledPin};
+const float ADC_MAX = ${adcMax};
+const float VREF = ${vRef};
+
+unsigned long lastReadAt = 0;
+const unsigned long READ_INTERVAL = 250;
+
+float estimateDistanceCmFromIr(float voltage) {
+  // Approximation for common Sharp-style analog IR distance sensors.
+  if (voltage < 0.2f) return 80.0f;
+  float distance = 27.86f * pow(voltage, -1.15f);
+  if (distance < 4.0f) distance = 4.0f;
+  if (distance > 80.0f) distance = 80.0f;
+  return distance;
+}
+
+void setup() {
+  pinMode(STATUS_LED, OUTPUT);
+  Serial.begin(9600);
+}
+
+void loop() {
+  const unsigned long now = millis();
+  if (now - lastReadAt < READ_INTERVAL) return;
+  lastReadAt = now;
+
+  const int raw = analogRead(IR_SENSOR_PIN);
+  const float voltage = (raw / ADC_MAX) * VREF;
+  const float distanceCm = estimateDistanceCmFromIr(voltage);
+
+  Serial.print("Distance: ");
+  Serial.print(distanceCm, 1);
+  Serial.println(" cm");
+
+  digitalWrite(STATUS_LED, distanceCm <= 20.0f ? HIGH : LOW);
+}
+`);
+  }
 
   return toSafeFileText(`// ${projectTitle}
 // ${summary}
@@ -424,709 +546,6 @@ const getBoardLayout = (boardKey) => {
     pins: ["IOREF", "RESET", "3.3V", "5V", "GND", "GND", "VIN", "D0", "D1", "D2", "D3", "D4", "D5", "D6", "D7", "D8", "D9", "D10", "D11", "D12", "D13", "A0", "A1", "A2", "A3", "A4", "A5"],
     pinLayout
   };
-};
-
-const getDiagramModel = (project = null, messages = []) => {
-  const text = tokenizeProjectText(project, messages);
-  const components = Array.isArray(project?.componentsState?.components) ? project.componentsState.components : [];
-  const boardKey = inferBoardKey(project, messages);
-  const boardSchema = BOARD_SCHEMAS[boardKey] || BOARD_SCHEMAS.arduino;
-  const boardLayout = getBoardLayout(boardKey);
-  const signalPins = boardSchema.signalPins;
-  const powerPin = boardSchema.powerPin;
-  const groundPin = boardSchema.groundPin;
-
-  const inferred = {
-    board: {
-      id: "arduino",
-      label: boardLayout.label,
-      subtitle: boardLayout.subtitle,
-      type: "board",
-      x: 0.49,
-      y: 0.08,
-      w: boardLayout.w,
-      h: boardLayout.h,
-      pins: boardLayout.pins,
-      pinLayout: boardLayout.pinLayout
-    },
-    nodes: [],
-    wires: [],
-    signature: text,
-    layoutDescription: `${boardLayout.label} centered with sensors stacked on the left and outputs grouped below/right for clean curved wiring.`
-  };
-
-  const addNode = (node) => {
-    inferred.nodes.push({
-      id: node.id,
-      label: node.label,
-      subtitle: node.subtitle || "",
-      lane: node.lane || "left",
-      x: node.x,
-      y: node.y,
-      w: node.w,
-      h: node.h,
-      color: node.color,
-      pins: node.pins || [],
-      pinLayout: node.pinLayout || []
-    });
-  };
-
-  const addWire = (from, to, label, color) => {
-    inferred.wires.push({ from, to, label, color });
-  };
-
-  const has = (...terms) => terms.some((term) => text.includes(term));
-
-  const usesTemperature = has("temperature", "humid", "climate", "weather", "dht22", "dht11");
-  const usesLight = has("light", "blink", "led", "lamp", "lamp", "brightness");
-  const usesBuzzer = has("buzzer", "alarm", "alert", "sound");
-  const usesUltrasonic = has("ultrasonic", "distance", "parking", "sonar");
-  const usesServo = has("servo", "gate", "arm", "turn");
-  const usesRelay = has("relay", "switch", "control appliance", "motor");
-
-  if (usesTemperature) {
-    addNode({
-      id: "dht22",
-      label: components.find((item) => /dht/i.test(item)) || "DHT22",
-      subtitle: "Digital temperature and humidity sensor",
-      lane: "left",
-      x: 0.06,
-      y: 0.16,
-      w: 350,
-      h: 160,
-      color: "#dce9ff",
-      pins: ["VCC", "GND", "DATA"],
-      pinLayout: [
-        { name: "VCC", x: 342, y: 52, side: "right" },
-        { name: "GND", x: 342, y: 92, side: "right" },
-        { name: "DATA", x: 342, y: 132, side: "right" }
-      ]
-    });
-
-    addNode({
-      id: "lcd",
-      label: components.find((item) => /lcd|display/i.test(item)) || "LCD 16x2 I2C",
-      subtitle: "16x2 character LCD display with I2C backpack",
-      lane: "right",
-      x: 0.64,
-      y: 0.58,
-      w: 380,
-      h: 160,
-      color: "#dff7e8",
-      pins: ["VCC", "GND", "SDA", "SCL"],
-      pinLayout: [
-        { name: "VCC", x: 372, y: 48, side: "right" },
-        { name: "GND", x: 372, y: 80, side: "right" },
-        { name: "SDA", x: 372, y: 112, side: "right" },
-        { name: "SCL", x: 372, y: 144, side: "right" }
-      ]
-    });
-
-    addWire({ nodeId: "dht22", pin: "VCC" }, { nodeId: "arduino", pin: powerPin }, `VCC → ${powerPin}`, "#ff4444");
-    addWire({ nodeId: "dht22", pin: "GND" }, { nodeId: "arduino", pin: groundPin }, `GND → ${groundPin}`, "#0f0f0f");
-    addWire({ nodeId: "dht22", pin: "DATA" }, { nodeId: "arduino", pin: signalPins.dhtData }, `DATA → ${signalPins.dhtData}`, "#b54dff");
-    addWire({ nodeId: "lcd", pin: "VCC" }, { nodeId: "arduino", pin: powerPin }, `VCC → ${powerPin}`, "#ff4444");
-    addWire({ nodeId: "lcd", pin: "GND" }, { nodeId: "arduino", pin: groundPin }, `GND → ${groundPin}`, "#0f0f0f");
-    addWire({ nodeId: "lcd", pin: "SDA" }, { nodeId: "arduino", pin: signalPins.i2cSda }, `SDA → ${signalPins.i2cSda}`, "#2563eb");
-    addWire({ nodeId: "lcd", pin: "SCL" }, { nodeId: "arduino", pin: signalPins.i2cScl }, `SCL → ${signalPins.i2cScl}`, "#2563eb");
-  }
-
-  if (usesLight && !usesTemperature) {
-    addNode({
-      id: "led",
-      label: components.find((item) => /led/i.test(item)) || "LED",
-      subtitle: "Light output for blink or status",
-      lane: "left",
-      x: 0.08,
-      y: 0.28,
-      w: 270,
-      h: 130,
-      color: "#e0ecff",
-      pins: ["ANODE", "CATHODE"],
-      pinLayout: [
-        { name: "ANODE", x: 262, y: 44, side: "right" },
-        { name: "CATHODE", x: 262, y: 88, side: "right" }
-      ]
-    });
-
-    addWire({ nodeId: "led", pin: "ANODE" }, { nodeId: "arduino", pin: signalPins.led }, `ANODE → ${signalPins.led}`, "#ff4444");
-    addWire({ nodeId: "led", pin: "CATHODE" }, { nodeId: "arduino", pin: groundPin }, `CATHODE → ${groundPin}`, "#0f0f0f");
-  }
-
-  if (usesBuzzer) {
-    addNode({
-      id: "buzzer",
-      label: components.find((item) => /buzzer/i.test(item)) || "Piezo buzzer",
-      subtitle: "Audible alert output",
-      lane: "right",
-      x: 0.66,
-      y: usesTemperature ? 0.28 : 0.48,
-      w: 280,
-      h: 130,
-      color: "#fde9d7",
-      pins: ["+", "-"],
-      pinLayout: [
-        { name: "+", x: 272, y: 44, side: "right" },
-        { name: "-", x: 272, y: 88, side: "right" }
-      ]
-    });
-
-    addWire({ nodeId: "buzzer", pin: "+" }, { nodeId: "arduino", pin: signalPins.buzzer }, `+ → ${signalPins.buzzer}`, "#ff4444");
-    addWire({ nodeId: "buzzer", pin: "-" }, { nodeId: "arduino", pin: groundPin }, `- → ${groundPin}`, "#0f0f0f");
-  }
-
-  if (usesUltrasonic) {
-    addNode({
-      id: "ultrasonic",
-      label: components.find((item) => /ultrasonic/i.test(item)) || "HC-SR04",
-      subtitle: "Distance sensor",
-      lane: "left",
-      x: 0.06,
-      y: 0.12,
-      w: 300,
-      h: 150,
-      color: "#dbf4ff",
-      pins: ["VCC", "GND", "TRIG", "ECHO"],
-      pinLayout: [
-        { name: "VCC", x: 292, y: 46, side: "right" },
-        { name: "GND", x: 292, y: 78, side: "right" },
-        { name: "TRIG", x: 292, y: 110, side: "right" },
-        { name: "ECHO", x: 292, y: 142, side: "right" }
-      ]
-    });
-
-    addWire({ nodeId: "ultrasonic", pin: "VCC" }, { nodeId: "arduino", pin: powerPin }, `VCC → ${powerPin}`, "#ff4444");
-    addWire({ nodeId: "ultrasonic", pin: "GND" }, { nodeId: "arduino", pin: groundPin }, `GND → ${groundPin}`, "#0f0f0f");
-    addWire({ nodeId: "ultrasonic", pin: "TRIG" }, { nodeId: "arduino", pin: signalPins.trig }, `TRIG → ${signalPins.trig}`, "#b54dff");
-    addWire({ nodeId: "ultrasonic", pin: "ECHO" }, { nodeId: "arduino", pin: signalPins.echo }, `ECHO → ${signalPins.echo}`, "#b54dff");
-  }
-
-  if (usesServo) {
-    addNode({
-      id: "servo",
-      label: components.find((item) => /servo/i.test(item)) || "Servo motor",
-      subtitle: "Moves to a set angle",
-      lane: "right",
-      x: 0.68,
-      y: usesTemperature ? 0.26 : 0.40,
-      w: 280,
-      h: 130,
-      color: "#e9e0ff",
-      pins: ["VCC", "GND", "SIGNAL"],
-      pinLayout: [
-        { name: "VCC", x: 272, y: 44, side: "right" },
-        { name: "GND", x: 272, y: 88, side: "right" },
-        { name: "SIGNAL", x: 272, y: 112, side: "right" }
-      ]
-    });
-
-    addWire({ nodeId: "servo", pin: "VCC" }, { nodeId: "arduino", pin: powerPin }, `VCC → ${powerPin}`, "#ff4444");
-    addWire({ nodeId: "servo", pin: "GND" }, { nodeId: "arduino", pin: groundPin }, `GND → ${groundPin}`, "#0f0f0f");
-    addWire({ nodeId: "servo", pin: "SIGNAL" }, { nodeId: "arduino", pin: signalPins.servo }, `SIGNAL → ${signalPins.servo}`, "#2563eb");
-  }
-
-  if (usesRelay) {
-    addNode({
-      id: "relay",
-      label: components.find((item) => /relay/i.test(item)) || "1-channel relay",
-      subtitle: "Switches a higher-power load",
-      lane: "right",
-      x: 0.66,
-      y: usesTemperature ? 0.50 : 0.52,
-      w: 320,
-      h: 150,
-      color: "#ffe9e9",
-      pins: ["VCC", "GND", "IN"],
-      pinLayout: [
-        { name: "VCC", x: 312, y: 48, side: "right" },
-        { name: "GND", x: 312, y: 82, side: "right" },
-        { name: "IN", x: 312, y: 116, side: "right" }
-      ]
-    });
-
-    addWire({ nodeId: "relay", pin: "VCC" }, { nodeId: "arduino", pin: powerPin }, `VCC → ${powerPin}`, "#ff4444");
-    addWire({ nodeId: "relay", pin: "GND" }, { nodeId: "arduino", pin: groundPin }, `GND → ${groundPin}`, "#0f0f0f");
-    addWire({ nodeId: "relay", pin: "IN" }, { nodeId: "arduino", pin: signalPins.relay }, `IN → ${signalPins.relay}`, "#2563eb");
-  }
-
-  if (inferred.nodes.length === 0) {
-    addNode({
-      id: "sensor",
-      label: components[0] || (has("temperature", "humid") ? "DHT22" : has("light", "blink") ? "LED" : "Sensor"),
-      subtitle: "Primary input for this project",
-      lane: "left",
-      x: 0.08,
-      y: 0.24,
-      w: 300,
-      h: 140,
-      color: "#dce9ff",
-      pins: ["VCC", "GND", "DATA"],
-      pinLayout: [
-        { name: "VCC", x: 292, y: 44, side: "right" },
-        { name: "GND", x: 292, y: 82, side: "right" },
-        { name: "DATA", x: 292, y: 120, side: "right" }
-      ]
-    });
-
-    addWire({ nodeId: "sensor", pin: "VCC" }, { nodeId: "arduino", pin: powerPin }, `VCC → ${powerPin}`, "#ff4444");
-    addWire({ nodeId: "sensor", pin: "GND" }, { nodeId: "arduino", pin: groundPin }, `GND → ${groundPin}`, "#0f0f0f");
-    addWire({ nodeId: "sensor", pin: "DATA" }, { nodeId: "arduino", pin: signalPins.data }, `DATA → ${signalPins.data}`, "#b54dff");
-  }
-
-  const laneGroups = inferred.nodes.reduce((accumulator, node) => {
-    const lane = node.lane || "left";
-    accumulator[lane] = accumulator[lane] || [];
-    accumulator[lane].push(node);
-    return accumulator;
-  }, { left: [], right: [], center: [] });
-
-  const placeLane = (laneNodes, x, startY, gap) => {
-    laneNodes.forEach((node, index) => {
-      node.x = x;
-      node.y = startY + index * gap;
-    });
-  };
-
-  const leftGap = laneGroups.left.length > 1 ? Math.min(0.24, 0.64 / (laneGroups.left.length - 1)) : 0;
-  const rightGap = laneGroups.right.length > 1 ? Math.min(0.24, 0.64 / (laneGroups.right.length - 1)) : 0;
-
-  placeLane(laneGroups.left, 0.06, laneGroups.left.length > 1 ? 0.10 : 0.24, leftGap || 0.22);
-  placeLane(laneGroups.right, 0.66, laneGroups.right.length > 1 ? 0.12 : 0.38, rightGap || 0.22);
-  placeLane(laneGroups.center, 0.36, 0.24, 0.22);
-
-  return inferred;
-};
-
-const buildDiagramExport = (diagram) => {
-  if (!diagram) return {};
-
-  return {
-    visualLayout: {
-      theme: "dark-grid",
-      style: "premium circuit builder",
-      boardPosition: {
-        x: Math.round(diagram.board.x * 100),
-        y: Math.round(diagram.board.y * 100),
-        width: diagram.board.w,
-        height: diagram.board.h
-      },
-      description: diagram.layoutDescription
-    },
-    board: {
-      label: diagram.board.label,
-      subtitle: diagram.board.subtitle,
-      pins: diagram.board.pinLayout.map((pin) => pin.name)
-    },
-    components: diagram.nodes.map((node) => ({
-      id: node.id,
-      label: node.label,
-      subtitle: node.subtitle,
-      lane: node.lane,
-      position: {
-        x: Math.round(node.x * 100),
-        y: Math.round(node.y * 100),
-        width: node.w,
-        height: node.h
-      },
-      pins: node.pins
-    })),
-    connections: diagram.wires.map((wire) => ({
-      from: `${wire.from.nodeId}.${wire.from.pin}`,
-      to: `${wire.to.nodeId}.${wire.to.pin}`,
-      label: wire.label,
-      color: wire.color
-    })),
-    interaction: {
-      draggableComponents: true,
-      hoverHighlight: true,
-      curvedRouting: true,
-      connectionLabels: true
-    }
-  };
-};
-
-const DiagramPreview = ({ isDark, diagram: incomingDiagram }) => {
-  const canvasRef = useRef(null);
-  const stageRef = useRef(null);
-  const dragRef = useRef({ nodeId: null, offsetX: 0, offsetY: 0 });
-  const panRef = useRef({ active: false, startX: 0, startY: 0, translateX: 0, translateY: 0 });
-  const [hoveredWire, setHoveredWire] = useState(null);
-  const [positions, setPositions] = useState({});
-  const [viewport, setViewport] = useState({ scale: 1, translateX: 0, translateY: 0 });
-
-  const diagram = incomingDiagram || getDiagramModel();
-
-  const getCanvasSize = () => {
-    const container = canvasRef.current;
-    return {
-      width: container?.clientWidth || 1,
-      height: container?.clientHeight || 1
-    };
-  };
-
-  const getWorldBounds = () => {
-    const boardBox = getNodeBox(diagram.board);
-    const boxes = [boardBox, ...diagram.nodes.map((node) => getNodeBox(node))];
-    const padding = 48;
-
-    const minX = Math.min(...boxes.map((box) => box.x)) - padding;
-    const minY = Math.min(...boxes.map((box) => box.y)) - padding;
-    const maxX = Math.max(...boxes.map((box) => box.x + box.w)) + padding;
-    const maxY = Math.max(...boxes.map((box) => box.y + box.h)) + padding;
-
-    return {
-      x: minX,
-      y: minY,
-      width: Math.max(maxX - minX, 1),
-      height: Math.max(maxY - minY, 1)
-    };
-  };
-
-  const zoomTo = (nextScale, focusX = null, focusY = null) => {
-    const container = canvasRef.current;
-    if (!container) return;
-
-    const bounds = container.getBoundingClientRect();
-    const current = viewport;
-    const clampedScale = Math.min(Math.max(nextScale, 0.45), 1.8);
-    const anchorX = focusX ?? bounds.width / 2;
-    const anchorY = focusY ?? bounds.height / 2;
-    const worldX = (anchorX - current.translateX) / current.scale;
-    const worldY = (anchorY - current.translateY) / current.scale;
-
-    setViewport({
-      scale: clampedScale,
-      translateX: anchorX - worldX * clampedScale,
-      translateY: anchorY - worldY * clampedScale
-    });
-  };
-
-  const fitToView = () => {
-    const container = canvasRef.current;
-    if (!container) return;
-
-    const bounds = container.getBoundingClientRect();
-    const world = getWorldBounds();
-    const scale = Math.min(bounds.width / world.width, bounds.height / world.height) * 0.92;
-    const clampedScale = Math.min(Math.max(scale, 0.45), 1.2);
-    const translateX = (bounds.width - world.width * clampedScale) / 2 - world.x * clampedScale;
-    const translateY = (bounds.height - world.height * clampedScale) / 2 - world.y * clampedScale;
-
-    setViewport({ scale: clampedScale, translateX, translateY });
-  };
-
-  useEffect(() => {
-    const initial = {};
-    if (diagram.nodes.length === 0) {
-      return;
-    }
-
-    diagram.nodes.forEach((node) => {
-      initial[node.id] = positions[node.id] || { x: node.x, y: node.y };
-    });
-
-    initial[diagram.board.id] = positions[diagram.board.id] || { x: diagram.board.x, y: diagram.board.y };
-
-    setPositions(initial);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [diagram.signature]);
-
-  useEffect(() => {
-    const frame = window.requestAnimationFrame(() => {
-      fitToView();
-    });
-
-    return () => window.cancelAnimationFrame(frame);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [diagram.signature]);
-
-  const getNodeBox = (node) => {
-    const size = node.id === diagram.board.id ? { w: node.w, h: node.h } : { w: node.w, h: node.h };
-    const pos = positions[node.id] || { x: node.x, y: node.y };
-    const container = canvasRef.current;
-    const width = container?.clientWidth || 1;
-    const height = container?.clientHeight || 1;
-
-    return {
-      x: pos.x * width,
-      y: pos.y * height,
-      w: size.w,
-      h: size.h
-    };
-  };
-
-  const getConnectorPoint = (node, pinIndex, side = "right") => {
-    const layoutPin = (node.pinLayout || [])[pinIndex] || (node.pinLayout || []).find((pin) => pin.name === (node.pins || [])[pinIndex]);
-    if (layoutPin) {
-      const box = getNodeBox(node);
-      const x = box.x + layoutPin.x;
-      const y = box.y + layoutPin.y;
-      return { x, y };
-    }
-
-    const box = getNodeBox(node);
-    const pins = node.pins || [];
-    const yStep = box.h / (pins.length + 1 || 1);
-    const y = box.y + yStep * (pinIndex + 1);
-
-    if (side === "left") {
-      return { x: box.x, y };
-    }
-
-    if (side === "board") {
-      return { x: box.x, y };
-    }
-
-    return { x: box.x + box.w, y };
-  };
-
-  const getNodeById = (nodeId) => {
-    if (nodeId === diagram.board.id) return diagram.board;
-    return diagram.nodes.find((node) => node.id === nodeId) || diagram.board;
-  };
-
-  const onPointerMove = (event) => {
-    if (dragRef.current.nodeId && canvasRef.current) {
-      const bounds = canvasRef.current.getBoundingClientRect();
-      const width = bounds.width || 1;
-      const height = bounds.height || 1;
-      const nextX = (event.clientX - bounds.left - viewport.translateX - dragRef.current.offsetX) / (width * viewport.scale);
-      const nextY = (event.clientY - bounds.top - viewport.translateY - dragRef.current.offsetY) / (height * viewport.scale);
-
-      setPositions((prev) => ({
-        ...prev,
-        [dragRef.current.nodeId]: {
-          x: Math.min(Math.max(nextX, 0.02), 0.92),
-          y: Math.min(Math.max(nextY, 0.02), 0.88)
-        }
-      }));
-      return;
-    }
-
-    if (panRef.current.active) {
-      const deltaX = event.clientX - panRef.current.startX;
-      const deltaY = event.clientY - panRef.current.startY;
-
-      setViewport((prev) => ({
-        ...prev,
-        translateX: panRef.current.translateX + deltaX,
-        translateY: panRef.current.translateY + deltaY
-      }));
-    }
-  };
-
-  const onPointerUp = () => {
-    dragRef.current.nodeId = null;
-    panRef.current.active = false;
-    document.body.style.userSelect = "";
-    document.body.style.cursor = "";
-  };
-
-  const onWheel = (event) => {
-    if (!canvasRef.current) return;
-    event.preventDefault();
-
-    const rect = canvasRef.current.getBoundingClientRect();
-    const focusX = event.clientX - rect.left;
-    const focusY = event.clientY - rect.top;
-    const delta = event.deltaY < 0 ? 0.12 : -0.12;
-    zoomTo(viewport.scale + delta, focusX, focusY);
-  };
-
-  const startPan = (event) => {
-    const target = event.target;
-    const isNodeDrag = target.closest?.("[data-draggable-node='true']");
-    const isButton = target.closest?.("button");
-
-    if (isNodeDrag || isButton) {
-      return;
-    }
-
-    panRef.current.active = true;
-    panRef.current.startX = event.clientX;
-    panRef.current.startY = event.clientY;
-    panRef.current.translateX = viewport.translateX;
-    panRef.current.translateY = viewport.translateY;
-    document.body.style.userSelect = "none";
-    document.body.style.cursor = "grab";
-  };
-
-  useEffect(() => {
-    window.addEventListener("pointermove", onPointerMove);
-    window.addEventListener("pointerup", onPointerUp);
-
-    return () => {
-      window.removeEventListener("pointermove", onPointerMove);
-      window.removeEventListener("pointerup", onPointerUp);
-    };
-  });
-
-  const renderNode = (node, isBoard = false) => {
-    const box = getNodeBox(node);
-    const pinList = node.pins || [];
-    const pinLayout = node.pinLayout || [];
-    const panelClass = isBoard
-      ? "border-white/20 bg-[#eaf0fa] text-[#0f172a]"
-      : node.color === "#dff7e8"
-        ? "border-black/10 bg-[#dff7e8] text-[#0f172a]"
-        : node.color === "#e9e0ff"
-          ? "border-black/10 bg-[#e9e0ff] text-[#0f172a]"
-          : node.color === "#ffe9e9"
-            ? "border-black/10 bg-[#ffe9e9] text-[#0f172a]"
-            : node.color === "#fde9d7"
-              ? "border-black/10 bg-[#fde9d7] text-[#0f172a]"
-              : "border-black/10 bg-[#dce9ff] text-[#0f172a]";
-
-    return (
-      <div
-        key={node.id}
-        data-draggable-node="true"
-        className={`absolute select-none overflow-hidden rounded-[24px] border px-5 py-4 shadow-[0_18px_50px_rgba(15,23,42,0.14)] backdrop-blur-[1px] ${panelClass} cursor-grab transition-transform duration-150 active:cursor-grabbing hover:-translate-y-0.5`}
-        style={{ left: box.x, top: box.y, width: box.w, height: box.h }}
-        onPointerDown={(event) => {
-          const target = event.currentTarget;
-          const bounds = target.getBoundingClientRect();
-          dragRef.current.nodeId = node.id;
-          dragRef.current.offsetX = event.clientX - bounds.left;
-          dragRef.current.offsetY = event.clientY - bounds.top;
-          document.body.style.userSelect = "none";
-          document.body.style.cursor = "grabbing";
-        }}
-      >
-        <div className={`absolute inset-x-0 top-0 h-1 ${isBoard ? "bg-gradient-to-r from-[#3b82f6] via-[#6366f1] to-[#8b5cf6]" : "bg-gradient-to-r from-[#0ea5e9] via-[#8b5cf6] to-[#f59e0b]"}`} />
-
-        <div className="flex items-start justify-between gap-3">
-          <div>
-            <div className="text-[15px] font-semibold leading-tight">{node.label}</div>
-            {node.subtitle && <div className="mt-1 text-[11px] leading-4 text-[#475569]">{node.subtitle}</div>}
-          </div>
-          <span className="rounded-full border border-black/10 bg-white/70 px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.12em] text-[#334155]">
-            {isBoard ? "Board" : node.id}
-          </span>
-        </div>
-
-        {isBoard && (
-          <div className="mt-4 flex items-center gap-3 text-[10px] font-semibold uppercase tracking-[0.14em] text-[#475569]">
-            <span className="rounded-full bg-[#dbeafe] px-2 py-1 text-[#1d4ed8]">Power</span>
-            <span className="rounded-full bg-[#ede9fe] px-2 py-1 text-[#6d28d9]">Digital</span>
-            <span className="rounded-full bg-[#fef3c7] px-2 py-1 text-[#b45309]">Analog</span>
-          </div>
-        )}
-
-        {pinList.map((pin, index) => {
-          const layout = pinLayout[index] || pinLayout.find((entry) => entry.name === pin);
-          const x = layout ? layout.x : box.w - 18;
-          const y = layout ? layout.y : 52 + index * 34;
-          const labelX = layout?.side === "left" ? x - 8 : layout?.side === "bottom" ? x - 12 : x - 62;
-          const labelY = layout?.side === "left" ? y + 5 : layout?.side === "bottom" ? y - 22 : y + 5;
-
-          return (
-            <div key={`${pin}-${index}`}>
-              <span
-                className="absolute border border-white/80 bg-white shadow-[0_0_0_2px_rgba(59,130,246,0.2)] transition-transform duration-150 hover:scale-125"
-                style={{ left: x - 5, top: y - 5, width: 10, height: 10, borderRadius: 999 }}
-              />
-              <span
-                className="absolute rounded-md border border-black/10 bg-white/80 px-1.5 py-0.5 text-[11px] font-medium text-[#334155] shadow-sm"
-                style={{ left: labelX, top: labelY }}
-              >
-                {pin}
-              </span>
-            </div>
-          );
-        })}
-      </div>
-    );
-  };
-
-  return (
-    <div
-      ref={canvasRef}
-      className={`relative h-full w-full overflow-hidden rounded-[22px] border ${isDark ? "border-white/10 bg-[#0f1116]" : "border-black/10 bg-[#f8fafc]"}`}
-      onWheel={onWheel}
-      onPointerDown={startPan}
-      onPointerMove={onPointerMove}
-      onPointerUp={onPointerUp}
-      onPointerLeave={onPointerUp}
-    >
-      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top_left,rgba(99,102,241,0.14),transparent_28%),radial-gradient(circle_at_bottom_right,rgba(59,130,246,0.12),transparent_26%)]" />
-      <div
-        ref={stageRef}
-        className="absolute left-0 top-0 h-full w-full origin-top-left"
-        style={{ transform: `translate(${viewport.translateX}px, ${viewport.translateY}px) scale(${viewport.scale})` }}
-      >
-        <svg className="absolute inset-0 h-full w-full" viewBox="0 0 1000 700" preserveAspectRatio="none" aria-hidden="true">
-          <defs>
-            <pattern id="diagramGrid" width="48" height="48" patternUnits="userSpaceOnUse">
-              <path d="M 48 0 L 0 0 0 48" fill="none" stroke={isDark ? "rgba(255,255,255,0.04)" : "rgba(15,23,42,0.06)"} strokeWidth="1" />
-            </pattern>
-            <pattern id="diagramDots" width="24" height="24" patternUnits="userSpaceOnUse">
-              <circle cx="2" cy="2" r="1" fill={isDark ? "rgba(255,255,255,0.09)" : "rgba(15,23,42,0.08)"} />
-            </pattern>
-          </defs>
-          <rect width="1000" height="700" fill="url(#diagramGrid)" />
-          <rect width="1000" height="700" fill="url(#diagramDots)" />
-
-          {diagram.wires.map((wire, index) => {
-            const fromNode = getNodeById(wire.from.nodeId);
-            const toNode = getNodeById(wire.to.nodeId);
-            const fromPinIndex = (fromNode.pins || []).indexOf(wire.from.pin);
-            const toPinIndex = (toNode.pins || []).indexOf(wire.to.pin);
-            const fromPoint = getConnectorPoint(fromNode, Math.max(fromPinIndex, 0), fromNode.id === diagram.board.id ? "board" : "right");
-            const toPoint = getConnectorPoint(toNode, Math.max(toPinIndex, 0), toNode.id === diagram.board.id ? "board" : "left");
-            const direction = fromPoint.x < toPoint.x ? 1 : -1;
-            const distance = Math.max(Math.abs(toPoint.x - fromPoint.x), 120);
-            const bend = 72 + Math.min(distance * 0.22, 120);
-            const curveLift = (index % 3 - 1) * 10;
-            const path = `M ${fromPoint.x} ${fromPoint.y} C ${fromPoint.x + direction * bend} ${fromPoint.y + curveLift}, ${toPoint.x - direction * bend} ${toPoint.y - curveLift}, ${toPoint.x} ${toPoint.y}`;
-            const labelX = (fromPoint.x + toPoint.x) / 2;
-            const labelY = (fromPoint.y + toPoint.y) / 2 - 14;
-            const wireKey = `${wire.from.nodeId}:${wire.from.pin}->${wire.to.nodeId}:${wire.to.pin}`;
-            const active = hoveredWire === wireKey;
-
-            return (
-              <g key={`${wire.label}-${index}`}>
-                <path
-                  d={path}
-                  fill="none"
-                  stroke={wire.color}
-                  strokeWidth={active ? 5 : 3}
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  opacity={active ? 1 : 0.9}
-                  onPointerEnter={() => setHoveredWire(wireKey)}
-                  onPointerLeave={() => setHoveredWire(null)}
-                />
-                <g transform={`translate(${labelX}, ${labelY})`}>
-                  <rect x="-48" y="-13" width="96" height="26" rx="13" fill={isDark ? "rgba(15,23,42,0.95)" : "rgba(255,255,255,0.97)"} stroke={isDark ? "rgba(255,255,255,0.16)" : "rgba(15,23,42,0.16)"} />
-                  <text x="0" y="4" textAnchor="middle" fontSize="11" fontWeight="700" fill={isDark ? "#e5e7eb" : "#0f172a"}>{wire.label}</text>
-                </g>
-              </g>
-            );
-          })}
-        </svg>
-
-        {renderNode(diagram.board, true)}
-        {diagram.nodes.map((node) => renderNode(node))}
-      </div>
-
-      <div className={`absolute right-4 top-4 flex items-center gap-2 rounded-xl border px-2 py-2 shadow-sm ${isDark ? "border-white/10 bg-[#0b0d12]/90" : "border-black/10 bg-white/90"}`}>
-        <button onClick={() => zoomTo(viewport.scale + 0.12)} className={`rounded-lg px-3 py-1 text-xs font-semibold ${isDark ? "bg-white/10 text-white hover:bg-white/15" : "bg-black/5 text-[#0f172a] hover:bg-black/10"}`}>+</button>
-        <button onClick={() => zoomTo(viewport.scale - 0.12)} className={`rounded-lg px-3 py-1 text-xs font-semibold ${isDark ? "bg-white/10 text-white hover:bg-white/15" : "bg-black/5 text-[#0f172a] hover:bg-black/10"}`}>-</button>
-        <button onClick={() => setViewport({ scale: 1, translateX: 0, translateY: 0 })} className={`rounded-lg px-3 py-1 text-xs font-semibold ${isDark ? "bg-white/10 text-white hover:bg-white/15" : "bg-black/5 text-[#0f172a] hover:bg-black/10"}`}>Reset</button>
-        <button onClick={fitToView} className={`rounded-lg px-3 py-1 text-xs font-semibold ${isDark ? "bg-white/10 text-white hover:bg-white/15" : "bg-black/5 text-[#0f172a] hover:bg-black/10"}`}>Fit</button>
-      </div>
-
-      <div className={`absolute left-4 top-4 rounded-xl border px-3 py-2 text-[11px] leading-5 shadow-sm ${isDark ? "border-white/10 bg-[#0b0d12]/90 text-[#e5e7eb]" : "border-black/10 bg-white/90 text-[#0f172a]"}`}>
-        <div className="font-semibold">Real circuit layout</div>
-        <div className="text-[10px] text-[#64748b]">Zoom, pan, and drag components. Pin labels and wire boxes stay aligned to the selected board.</div>
-      </div>
-
-      <div className={`absolute left-4 bottom-4 rounded-xl border px-3 py-2 text-[11px] font-semibold ${isDark ? "border-white/10 bg-[#0b0d12]/90 text-[#e5e7eb]" : "border-black/10 bg-white/90 text-[#0f172a]"}`}>
-        {diagram.layoutDescription}
-      </div>
-    </div>
-  );
 };
 
 const downloadTextFile = (filename, content) => {
@@ -1428,7 +847,6 @@ export default function ProjectChat({ onIdeationStateChange }) {
 
   const boardKey = inferBoardKey(project, messages);
   const boardSchema = BOARD_SCHEMAS[boardKey] || BOARD_SCHEMAS.arduino;
-  const diagram = getDiagramModel(project, messages);
 
   const handleTabSelect = (tabId) => {
     setActiveTab(tabId);
@@ -1445,15 +863,13 @@ export default function ProjectChat({ onIdeationStateChange }) {
     }
   }, [selectedPort, hardwarePorts, compilerFqbn]);
 
-  const generatedCodeText = buildMainCode(messages, boardSchema);
+  const generatedCodeText = buildMainCode(messages, boardSchema, project);
   const generatedPinsCsvText = buildPinsCsv(boardSchema);
   const generatedComponentsJsonText = buildComponentsJson(boardSchema);
   const generatedAssemblyMdText = buildAssemblyMd(messages, boardSchema);
-  const generatedDiagramText = toSafeFileText(JSON.stringify(buildDiagramExport(diagram), null, 2));
 
   const effectiveWorkspaceFiles = normalizeWorkspaceFiles({
     mainIno: workspaceFiles?.mainIno && !isCorruptedSketchText(workspaceFiles.mainIno) ? workspaceFiles.mainIno : generatedCodeText,
-    diagramJson: workspaceFiles?.diagramJson || generatedDiagramText,
     pinsCsv: workspaceFiles?.pinsCsv || generatedPinsCsvText,
     componentsJson: workspaceFiles?.componentsJson || generatedComponentsJsonText,
     assemblyMd: workspaceFiles?.assemblyMd || generatedAssemblyMdText
@@ -1463,14 +879,12 @@ export default function ProjectChat({ onIdeationStateChange }) {
   const pinsCsvText = effectiveWorkspaceFiles.pinsCsv;
   const componentsJsonText = effectiveWorkspaceFiles.componentsJson;
   const assemblyMdText = effectiveWorkspaceFiles.assemblyMd;
-  const diagramText = effectiveWorkspaceFiles.diagramJson;
   const outputText = serialConnected
     ? (liveOutput || "Waiting for Arduino serial data...")
     : "Connect Arduino to see real hardware output in realtime.";
 
   const filesByTab = {
     code: { name: "main.ino", content: codeText },
-    diagram: { name: "diagram.json", content: diagramText },
     pins: { name: "pins.csv", content: pinsCsvText },
     components: { name: "components.json", content: componentsJsonText },
     assembly: { name: "assembly.md", content: assemblyMdText },
@@ -1631,17 +1045,16 @@ export default function ProjectChat({ onIdeationStateChange }) {
 
       const res = await axios.post(
         "http://localhost:5000/api/project-ai/chat",
-        {
-          projectId: id,
-          message: userMsg,
-          workspaceFiles: {
-            "main.ino": codeText,
-            "diagram.json": diagramText,
-            "pins.csv": pinsCsvText,
-            "components.json": componentsJsonText,
-            "assembly.md": assemblyMdText
-          }
-        },
+          {
+            projectId: id,
+            message: userMsg,
+            workspaceFiles: {
+              "main.ino": codeText,
+              "pins.csv": pinsCsvText,
+              "components.json": componentsJsonText,
+              "assembly.md": assemblyMdText
+            }
+          },
         { withCredentials: true }
       );
 
@@ -1841,7 +1254,7 @@ export default function ProjectChat({ onIdeationStateChange }) {
               <div className={`flex items-start justify-between border-b px-5 py-4 ${isDark ? "border-white/10" : "border-black/10"}`}>
                 <div>
                   <p className="text-xl font-semibold">Workspace</p>
-                  <p className={`text-sm ${isDark ? "text-[#a1a1a1]" : "text-[#666]"}`}>Code, diagram, pins, components, assembly</p>
+                  <p className={`text-sm ${isDark ? "text-[#a1a1a1]" : "text-[#666]"}`}>Code, pins, components, assembly</p>
                 </div>
                 <div className="flex items-center gap-2">
                   <button
@@ -1890,7 +1303,6 @@ export default function ProjectChat({ onIdeationStateChange }) {
             <div className="flex flex-wrap items-center gap-2">
               {[
                 { id: "code", label: "Code" },
-                { id: "diagram", label: "Diagram" },
                 { id: "compiler", label: "Compiler" },
                 { id: "pins", label: "Pins" },
                 { id: "components", label: "Components" },
@@ -1909,9 +1321,7 @@ export default function ProjectChat({ onIdeationStateChange }) {
           </div>
 
           <div className={`min-h-0 flex-1 overflow-hidden ${isComponentsView ? "" : "px-5 py-4"}`}>
-            {activeTab === "diagram" ? (
-              <DiagramPreview isDark={isDark} diagram={diagram} />
-            ) : activeTab === "compiler" ? (
+            {activeTab === "compiler" ? (
               <div className={`flex h-full flex-col ${isDark ? "bg-[#252525]" : "bg-[#f8fafc]"}`}>
                 {/* Header - Compact */}
                 <div className={`border-b px-6 py-4 ${isDark ? "border-white/10 bg-[#2d2d38]" : "border-black/10 bg-white"}`}>

@@ -670,15 +670,13 @@ COMMON CALL
 const callAI = async (prompt, { pipeline = "ideation" } = {}) => {
   const groq = getGroqClient();
   const model = pipeline === "components" ? getGroqModelComponents() : getGroqModelIdeation();
-  const maxCompletionTokens = pipeline === "components" ? 700 : 1100;
   const baseArgs = {
     model,
     messages: [
       { role: "system", content: "Return ONLY valid JSON. No markdown. No prose. No <think>." },
       { role: "user", content: prompt }
     ],
-    temperature: 0.2,
-    max_completion_tokens: maxCompletionTokens
+    temperature: 0.2
   };
 
   let res;
@@ -1843,93 +1841,13 @@ ${userInput}
 };
 
 export const processComponents = async (project, userInput) => {
-  const clipText = (value = "", max = 1800) => {
-    const text = String(value || "").trim();
-    if (!text) return "";
-    if (text.length <= max) return text;
-    return `${text.slice(0, max)}\n...`;
-  };
-
-  const historyToText = (entries = [], limit = 10) => {
-    return (Array.isArray(entries) ? entries : [])
-      .slice(-limit)
-      .map((m) => `${m?.role === "user" ? "user" : "ai"}: ${clipText(stripThinking(m?.content || ""), 260)}`)
-      .join("\n");
-  };
-
-  const buildFocusedRegistryContext = (entries = [], seedText = "") => {
-    const source = Array.isArray(entries) ? entries : [];
-    if (source.length === 0) return [];
-
-    const terms = [...new Set(
-      String(seedText || "")
-        .toLowerCase()
-        .replace(/[^a-z0-9_\-\s]/g, " ")
-        .split(/\s+/)
-        .map((item) => item.trim())
-        .filter((item) => item.length >= 3)
-    )].slice(0, 30);
-
-    const scored = source.map((item) => {
-      const haystack = [
-        item?.name,
-        item?.type,
-        item?.category,
-        ...(Array.isArray(item?.pins) ? item.pins : []),
-        ...Object.keys(item?.capabilities || {})
-      ].join(" ").toLowerCase();
-
-      let score = 0;
-      for (const term of terms) {
-        if (haystack.includes(term)) score += 1;
-      }
-
-      return { item, score };
-    });
-
-    const focused = scored
-      .filter((entry) => entry.score > 0)
-      .sort((a, b) => b.score - a.score)
-      .map((entry) => entry.item);
-
-    if (focused.length > 0) {
-      return focused.slice(0, 36);
-    }
-
-    return source.slice(0, 28);
-  };
-
-  const messagesText = historyToText(project?.componentsMessages || [], 12);
-  const ideationMessagesText = historyToText(project?.messages || [], 8);
-  const projectAiMessagesText = historyToText(project?.projectAiMessages || [], 8);
-
-  const workspaceSnapshot = {
-    "main.ino": clipText(project?.workspaceFiles?.mainIno || "", 1400),
-    "diagram.json": clipText(project?.workspaceFiles?.diagramJson || "", 2200),
-    "components.json": clipText(project?.workspaceFiles?.componentsJson || "", 900),
-    "pins.csv": clipText(project?.workspaceFiles?.pinsCsv || "", 900)
-  };
-
+  const messagesText = (project.componentsMessages || [])
+    .map(m => `${m.role}: ${m.content}`)
+    .join("\n");
   const runnerEvidence = buildWokwiEvidenceText(project);
   const ideationMeta = project?.meta || {};
   const generationProfile = project?.generationProfile || buildGenerationProfileFromMeta(ideationMeta);
   const registryContext = getAIContext();
-  const focusedRegistryContext = buildFocusedRegistryContext(
-    registryContext,
-    [
-      userInput,
-      project?.description || "",
-      project?.componentsState?.architecture || "",
-      (project?.componentsState?.components || []).join(" "),
-      workspaceSnapshot["components.json"]
-    ].join(" ")
-  );
-  const compactCatalog = clipText(formatWokwiComponentCatalogForPrompt(), 3600);
-  const deterministicBoardHint = {
-    boardPartType: generationProfile?.boardPartType || "wokwi-arduino-uno",
-    language: generationProfile?.language || "cpp",
-    powerSource: generationProfile?.powerSource || null
-  };
 
   const prompt = `
 You are a hardware systems architect.
@@ -1944,29 +1862,16 @@ RULES:
 - Be precise and practical
 - No vague components
 - Output must be buildable
-- You are my real-time Arduino hardware assistant.
-- Talk like a human lab partner, not documentation.
-- Sound natural: use plain conversational language and contractions.
-- Acknowledge what the user said before the next question.
-- Keep responses short (2-4 lines max).
-- Ask follow-up questions instead of long explanations.
-- Guide step-by-step, one check at a time.
-- Do NOT assume things; ask before concluding.
-- Focus on practical debugging (wiring, pins, code).
-- Avoid long theory unless user asks for it.
-- Conversation style: interactive, curious, direct.
-- If user describes a problem, do this format:
-  1) ask 1-2 clarifying questions,
-  2) suggest ONE small test step,
-  3) wait for user reply.
-- Do not dump full solutions unless explicitly asked.
-- If this is the first components turn or user says start, begin by asking what they have connected so far.
+- Include concise implementation guidance in reply.
 - You can ONLY reference component types listed in COMPONENT REGISTRY (AI CONTEXT) below.
 - When you mention a pin name, it must exist in that component's pin list.
 - If you need a part that is not listed, explicitly call it out as missing and suggest the closest listed alternative.
 - Use only approved Wokwi components from the catalog below.
 - If an unavailable part is needed, suggest nearest supported alternative.
 - If user explicitly requests custom component behavior, describe it as chip-<name> and mention it requires wokwi.toml + .chip.json/.wasm setup.
+- In reply, include two labeled sections:
+  1) "Connections" (what connects to what)
+  2) "Expected output" (what user sees/gets after connection)
 - Treat WOKWI RUNNER EVIDENCE as hard evidence from previous simulation/lint runs.
 - If evidence conflicts with assumptions, prefer evidence.
 - If lint/run/scenario reports failures, mention the critical failure in reply and provide corrective wiring/build steps.
@@ -2017,28 +1922,19 @@ ${JSON.stringify(generationProfile)}
 
 COMPONENT REGISTRY (AI CONTEXT):
 You can ONLY use these component names/types/pins/capabilities.
-${JSON.stringify(focusedRegistryContext)}
+${JSON.stringify(registryContext)}
 
 APPROVED WOKWI COMPONENT CATALOG:
-${compactCatalog}
+${formatWokwiComponentCatalogForPrompt()}
 
-DETERMINISTIC BOARD HINT:
-${JSON.stringify(deterministicBoardHint)}
+DETERMINISTIC BOARD PROFILES:
+${JSON.stringify(BOARD_PROFILE_MAP)}
 
 WOKWI RUNNER EVIDENCE:
 ${runnerEvidence}
 
-COMPONENTS CHAT HISTORY:
+CONVERSATION:
 ${messagesText}
-
-IDEATION CHAT MEMORY (recent):
-${ideationMessagesText || "(none)"}
-
-PROJECT AI CHAT MEMORY (recent):
-${projectAiMessagesText || "(none)"}
-
-WORKSPACE FILE SNAPSHOT (source of truth for wiring/components):
-${JSON.stringify(workspaceSnapshot, null, 2)}
 
 USER INPUT:
 ${userInput}
@@ -2048,11 +1944,11 @@ ${userInput}
 
   try {
     const parsed = safeParse(text);
-    const normalized = normalizeComponentsOutput(parsed, project, stripThinking(text), userInput);
+    const normalized = normalizeComponentsOutput(parsed, project, stripThinking(text));
     return enforceCatalogForComponents(normalized);
   } catch {
     // Keep chat flow alive when model returns plain text instead of strict JSON.
-    const normalized = normalizeComponentsOutput({}, project, stripThinking(text), userInput);
+    const normalized = normalizeComponentsOutput({}, project, stripThinking(text));
     return enforceCatalogForComponents(normalized);
   }
 };
@@ -2337,56 +2233,7 @@ ${userPrompt || "Generate best-fit sketch and diagram from the existing project 
   }
 };
 
-const pickFollowUp = (seedText = "") => {
-  const options = [
-    "What are you seeing on the board right now?",
-    "Can you tell me exactly what you connected so far?",
-    "What changed after the last step?",
-    "Want to check one pin together next?"
-  ];
-  const seed = String(seedText || "");
-  const hash = [...seed].reduce((acc, ch) => acc + ch.charCodeAt(0), 0);
-  return options[hash % options.length];
-};
-
-const shapeRealtimeComponentsReply = (value = "", { forceStartQuestion = false } = {}) => {
-  if (forceStartQuestion) {
-    return "Nice, let's do this together.\nWhat have you connected so far (board, power, and signal pins)?";
-  }
-
-  const cleaned = String(value || "").trim();
-  if (!cleaned) return "";
-
-  const normalizedLines = cleaned
-    .replace(/\r\n/g, "\n")
-    .split("\n")
-    .map((line) => line.replace(/\s+/g, " ").trim())
-    .filter(Boolean)
-    .slice(0, 4);
-
-  const sentenceMatches = normalizedLines.join(" ").match(/[^.!?]+[.!?]?/g) || [cleaned];
-  const compactSentences = sentenceMatches
-    .map((s) => s.replace(/\s+/g, " ").trim())
-    .filter(Boolean)
-    .slice(0, 4);
-
-  let reply = (normalizedLines.length > 0 ? normalizedLines : compactSentences)
-    .join("\n")
-    .trim();
-
-  if (reply.length > 340) {
-    reply = `${reply.slice(0, 337).trim()}...`;
-  }
-
-  const hasQuestion = /\?\s*$/.test(reply) || /\?/.test(reply);
-  if (!hasQuestion) {
-    reply = `${reply}\n${pickFollowUp(reply)}`;
-  }
-
-  return reply;
-};
-
-const normalizeComponentsOutput = (raw, project, fallbackReply = "Let's debug this together. What have you connected so far?", userInput = "") => {
+const normalizeComponentsOutput = (raw, project, fallbackReply = "I generated components guidance. Ask a follow-up for exact wiring and expected behavior.") => {
   const architecture = typeof raw?.architecture === "string" ? raw.architecture.trim() : "";
   const components = cleanArray(raw?.components);
   const apiEndpoints = cleanArray(raw?.apiEndpoints);
@@ -2438,12 +2285,6 @@ const normalizeComponentsOutput = (raw, project, fallbackReply = "Let's debug th
   if (!reply) {
     reply = fallbackReply;
   }
-
-  const messagesCount = Array.isArray(project?.componentsMessages) ? project.componentsMessages.length : 0;
-  const inputText = String(userInput || "").toLowerCase();
-  const forceStartQuestion = messagesCount === 0 || /\bstart\b|\bbegin\b/.test(inputText);
-
-  reply = shapeRealtimeComponentsReply(reply, { forceStartQuestion });
 
   return {
     architecture,
